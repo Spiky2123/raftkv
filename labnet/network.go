@@ -1,7 +1,8 @@
 package labnet
 
 import (
-	"reflect"
+	"bytes"
+	"encoding/gob"
 	"sync"
 )
 
@@ -31,8 +32,8 @@ func (n *Network) Call(from, to int, method string, args, reply any) bool {
 		return false
 	}
 
-	result := h(method, args)
-	reflect.ValueOf(reply).Elem().Set(reflect.ValueOf(result))
+	result := h(method, deepCopy(args))
+	copyInto(reply, result)
 
 	return true
 }
@@ -48,4 +49,26 @@ func (n *Network) Endpoint(id int) *Endpoint {
 
 func (e *Endpoint) Call(to int, method string, args, reply any) bool {
 	return e.net.Call(e.id, to, method, args, reply)
+}
+
+func deepCopy(v any) any {
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(&v); err != nil {
+		panic(err)
+	}
+	var out any
+	if err := gob.NewDecoder(&buf).Decode(&out); err != nil {
+		panic(err)
+	}
+	return out
+}
+
+func copyInto(dst, src any) {
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(src); err != nil {
+		panic(err)
+	}
+	if err := gob.NewDecoder(&buf).Decode(dst); err != nil {
+		panic(err)
+	}
 }

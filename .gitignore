@@ -1,0 +1,17 @@
+# IDE
+.idea/
+*.iml
+
+# Go build and test artifacts
+*.test
+*.out
+*.prof
+coverage.out
+bin/
+
+# Logs from stress and chaos runs
+*.log
+logs/
+
+# OS junk
+.DS_Store

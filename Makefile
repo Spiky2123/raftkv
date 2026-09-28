@@ -1,0 +1,13 @@
+.PHONY: test race stress bench
+
+test:
+	go test ./...
+
+race:
+	go test -race ./...
+
+stress:
+	go test -race -count=100 $(ARGS)
+
+bench:
+	go test -bench=. -benchmem ./...

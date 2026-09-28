@@ -38,3 +38,12 @@ func TestEndpoint(t *testing.T) {
 		t.Fatalf("got %q", reply)
 	}
 }
+
+func TestUnregisteredCall(t *testing.T) {
+	net := NewNetwork()
+	var reply string
+
+	if net.Call(0, 1, "Echo", "run", &reply) {
+		t.Fatal("call to unregistered node should fail")
+	}
+}

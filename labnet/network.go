@@ -5,15 +5,17 @@ import (
 	"encoding/gob"
 	"math/rand"
 	"sync"
+	"time"
 )
 
 type Network struct {
-	mu        sync.Mutex
-	handlers  map[int]Handler // node id -> function
-	group     map[int]int
-	nextGroup int
-	rng       *rand.Rand
-	dropRate  float64
+	mu                 sync.Mutex
+	handlers           map[int]Handler // node id -> function
+	group              map[int]int
+	nextGroup          int
+	rng                *rand.Rand
+	dropRate           float64
+	minDelay, maxDelay time.Duration
 }
 
 type Handler func(method string, args any) any
@@ -38,8 +40,11 @@ func (n *Network) Call(from, to int, method string, args, reply any) bool {
 	ok := n.Reachable(from, to)
 	dropReq := n.rng.Float64() < n.dropRate
 	dropReply := n.rng.Float64() < n.dropRate
+	reqDelay := n.randDelay()
+	replyDelay := n.randDelay()
 	n.mu.Unlock()
 
+	time.Sleep(reqDelay)
 	if h == nil || !ok || dropReq {
 		return false
 	}
@@ -50,6 +55,7 @@ func (n *Network) Call(from, to int, method string, args, reply any) bool {
 		return false
 	}
 
+	time.Sleep(replyDelay)
 	copyInto(reply, result)
 	return true
 }
@@ -88,6 +94,19 @@ func (n *Network) SetDropRate(p float64) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.dropRate = p
+}
+
+func (n *Network) SetDelay(min, max time.Duration) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.minDelay, n.maxDelay = min, max
+}
+
+func (n *Network) randDelay() time.Duration {
+	if n.maxDelay <= n.minDelay {
+		return n.minDelay
+	}
+	return n.minDelay + time.Duration(n.rng.Int63n(int64(n.maxDelay-n.minDelay)))
 }
 
 type Endpoint struct {

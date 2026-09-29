@@ -3,6 +3,7 @@ package labnet
 import (
 	"encoding/gob"
 	"testing"
+	"time"
 )
 
 import "raftkv/raft"
@@ -121,5 +122,20 @@ func TestDropAll(t *testing.T) {
 	net.SetDropRate(0)
 	if !net.Call(0, 1, "Echo", "bye", &r) {
 		t.Fatal("expected call to succeed")
+	}
+}
+
+func TestDelay(t *testing.T) {
+	net := NewNetwork(1)
+	net.Register(1, echo)
+	net.SetDelay(20*time.Millisecond, 20*time.Millisecond)
+
+	start := time.Now()
+	var r string
+	net.Call(0, 1, "Echo", "hi", &r)
+	elapsed := time.Since(start)
+
+	if elapsed < 40*time.Millisecond { // request delay + reply delay
+		t.Fatalf("elapsed %v, want at least 40ms", elapsed)
 	}
 }

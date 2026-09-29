@@ -49,6 +49,13 @@ func (n *Network) Call(from, to int, method string, args, reply any) bool {
 		return false
 	}
 
+	n.mu.Lock()
+	ok = n.Reachable(from, to) // Check in case reachable status changes while sleeping for the delay
+	n.mu.Unlock()
+	if !ok {
+		return false
+	}
+
 	result := h(method, deepCopy(args))
 
 	if dropReply {

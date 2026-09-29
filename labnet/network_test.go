@@ -20,7 +20,7 @@ func echo(method string, args any) any {
 }
 
 func TestEcho(t *testing.T) {
-	net := NewNetwork()
+	net := NewNetwork(1)
 	net.Register(1, echo)
 
 	var reply string
@@ -35,7 +35,7 @@ func TestEcho(t *testing.T) {
 }
 
 func TestEndpoint(t *testing.T) {
-	net := NewNetwork()
+	net := NewNetwork(1)
 	net.Register(1, echo)
 
 	ep := net.Endpoint(0)
@@ -50,7 +50,7 @@ func TestEndpoint(t *testing.T) {
 }
 
 func TestUnregisteredCall(t *testing.T) {
-	net := NewNetwork()
+	net := NewNetwork(1)
 	var reply string
 
 	if net.Call(0, 1, "Echo", "run", &reply) {
@@ -59,7 +59,7 @@ func TestUnregisteredCall(t *testing.T) {
 }
 
 func TestCallDoesNotShareMemory(t *testing.T) {
-	net := NewNetwork()
+	net := NewNetwork(1)
 
 	net.Register(1, func(method string, args any) any {
 		m := args.(Msg)
@@ -78,7 +78,7 @@ func TestCallDoesNotShareMemory(t *testing.T) {
 }
 
 func TestPartition(t *testing.T) {
-	net := NewNetwork()
+	net := NewNetwork(1)
 	for id := 1; id <= 3; id++ {
 		net.Register(id, echo)
 	}
@@ -106,5 +106,20 @@ func TestPartition(t *testing.T) {
 	}
 	if !call(2, 3) {
 		t.Fatal("others should still connect")
+	}
+}
+
+func TestDropAll(t *testing.T) {
+	net := NewNetwork(1)
+	net.Register(1, echo)
+	net.SetDropRate(1.0)
+	var r string
+	if net.Call(0, 1, "Echo", "hi", &r) {
+		t.Fatal("expected call to be dropped")
+	}
+
+	net.SetDropRate(0)
+	if !net.Call(0, 1, "Echo", "bye", &r) {
+		t.Fatal("expected call to succeed")
 	}
 }

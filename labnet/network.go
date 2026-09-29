@@ -3,6 +3,7 @@ package labnet
 import (
 	"bytes"
 	"encoding/gob"
+	"math/rand"
 	"sync"
 )
 
@@ -11,12 +12,18 @@ type Network struct {
 	handlers  map[int]Handler // node id -> function
 	group     map[int]int
 	nextGroup int
+	rng       *rand.Rand
+	dropRate  float64
 }
 
 type Handler func(method string, args any) any
 
-func NewNetwork() *Network {
-	return &Network{handlers: make(map[int]Handler), group: make(map[int]int)}
+func NewNetwork(seed int64) *Network {
+	return &Network{
+		handlers: make(map[int]Handler),
+		group:    make(map[int]int),
+		rng:      rand.New(rand.NewSource(seed)),
+	}
 }
 
 func (n *Network) Register(id int, h Handler) {
@@ -28,20 +35,26 @@ func (n *Network) Register(id int, h Handler) {
 func (n *Network) Call(from, to int, method string, args, reply any) bool {
 	n.mu.Lock()
 	h := n.handlers[to]
-	ok := n.reachable(from, to)
+	ok := n.Reachable(from, to)
+	dropReq := n.rng.Float64() < n.dropRate
+	dropReply := n.rng.Float64() < n.dropRate
 	n.mu.Unlock()
 
-	if h == nil || !ok {
+	if h == nil || !ok || dropReq {
 		return false
 	}
 
 	result := h(method, deepCopy(args))
-	copyInto(reply, result)
 
+	if dropReply {
+		return false
+	}
+
+	copyInto(reply, result)
 	return true
 }
 
-func (n *Network) reachable(from, to int) bool { // caller must hold n.mu
+func (n *Network) Reachable(from, to int) bool { // caller must hold n.mu
 	return n.group[from] == n.group[to]
 }
 
@@ -69,6 +82,12 @@ func (n *Network) Heal() {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.group = make(map[int]int)
+}
+
+func (n *Network) SetDropRate(p float64) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.dropRate = p
 }
 
 type Endpoint struct {

@@ -139,3 +139,36 @@ func TestDelay(t *testing.T) {
 		t.Fatalf("elapsed %v, want at least 40ms", elapsed)
 	}
 }
+
+func TestSameSeedSameDrops(t *testing.T) {
+	run := func(seed int64) []bool {
+		net := NewNetwork(seed)
+		net.Register(1, echo)
+		net.SetDropRate(0.5)
+		var results []bool
+		var r string
+		for i := 0; i <= 50; i++ {
+			results = append(results, net.Call(0, 1, "Echo", "hi", &r))
+		}
+		return results
+	}
+
+	a := run(42)
+	b := run(42)
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("call %d differs: %v vs %v", i, a[i], b[i])
+		}
+	}
+
+	allSame := true
+	for _, v := range a {
+		if v != a[0] {
+			allSame = false
+		}
+	}
+
+	if allSame {
+		t.Fatal("results are all identical, test isn't random")
+	}
+}

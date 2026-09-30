@@ -172,3 +172,20 @@ func TestSameSeedSameDrops(t *testing.T) {
 		t.Fatal("results are all identical, test isn't random")
 	}
 }
+
+func TestUnregister(t *testing.T) {
+	net := NewNetwork(1)
+
+	net.Register(1, echo)
+
+	var r string
+	if !net.Call(0, 1, "Echo", "hi", &r) {
+		t.Fatal("expected call to succeed")
+	}
+
+	net.Unregister(1)
+
+	if net.Call(0, 1, "Echo", "hi", &r) {
+		t.Fatal("expected call to fail")
+	}
+}

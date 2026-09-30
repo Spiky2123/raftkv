@@ -34,6 +34,12 @@ func (n *Network) Register(id int, h Handler) {
 	n.handlers[id] = h
 }
 
+func (n *Network) Unregister(id int) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	delete(n.handlers, id)
+}
+
 func (n *Network) Call(from, to int, method string, args, reply any) bool {
 	n.mu.Lock()
 	h := n.handlers[to]

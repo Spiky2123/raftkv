@@ -189,3 +189,25 @@ func TestUnregister(t *testing.T) {
 		t.Fatal("expected call to fail")
 	}
 }
+
+func TestNodesCallEachOther(t *testing.T) {
+	net := NewNetwork(1)
+
+	net.Register(1, func(method string, args any) any {
+		// While handling a call from node 0, node 1 calls node 2.
+		var reply string
+		net.Call(1, 2, "Echo", "from-1", &reply)
+		return "1 saw: " + reply
+	})
+	net.Register(2, echo)
+
+	var r string
+	if !net.Call(0, 1, "Echo", "hi", &r) {
+		t.Fatal("call to node 1 failed")
+	}
+
+	want := "1 saw: echo: from-1"
+	if r != want {
+		t.Fatalf("got %q, want %q", r, want)
+	}
+}

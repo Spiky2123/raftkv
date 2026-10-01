@@ -211,3 +211,24 @@ func TestNodesCallEachOther(t *testing.T) {
 		t.Fatalf("got %q, want %q", r, want)
 	}
 }
+
+func TestPartitionDuringDelay(t *testing.T) {
+	net := NewNetwork(1)
+	net.Register(1, echo)
+	net.SetDelay(200*time.Millisecond, 300*time.Millisecond)
+
+	c := make(chan bool)
+
+	go func(c chan bool) {
+		var ok bool
+		var r string
+		ok = net.Call(0, 1, "Echo", "hi", &r)
+		c <- ok
+	}(c)
+
+	time.Sleep(100 * time.Millisecond)
+	net.Partition([]int{0}, []int{1})
+	if <-c {
+		t.Fatal("expected call to fail")
+	}
+}

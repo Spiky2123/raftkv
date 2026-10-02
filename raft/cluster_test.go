@@ -33,7 +33,6 @@ func makeCluster(t *testing.T, n int) *cluster {
 }
 
 func (c *cluster) checkOneLeader(t *testing.T) int {
-	t.Skip()
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -59,18 +58,39 @@ func (c *cluster) checkOneLeader(t *testing.T) int {
 }
 
 func TestElection3(t *testing.T) {
+	t.Skip("election not implemented yet")
 	c := makeCluster(t, 3)
 	c.checkOneLeader(t)
 }
 
 func TestElectionTimer(t *testing.T) {
 	c := makeCluster(t, 1)
+	lo := 50 * time.Second
+	hi := 0 * time.Second
+	for i := 0; i < 100; i++ {
+		before := time.Now()
 
-	before := time.Now()
-	c.nodes[0].ResetElectionTimer()
-	deadline := c.nodes[0].electionDeadline
-	after := time.Now()
-	if deadline.Before(before.Add(150*time.Millisecond)) || deadline.After(after.Add(300*time.Millisecond)) {
-		t.Fatalf("deadline exceeds bounds, expected between 150ms to 300ms, got %v instead", deadline.Sub(before))
+		c.nodes[0].mu.Lock()
+		c.nodes[0].resetElectionTimerLocked()
+		deadline := c.nodes[0].electionDeadline
+
+		c.nodes[0].mu.Unlock()
+		after := time.Now()
+
+		if deadline.Before(before.Add(150*time.Millisecond)) || deadline.After(after.Add(300*time.Millisecond)) {
+			t.Fatalf("deadline exceeds bounds, expected between 150ms to 300ms, got %v instead", deadline.Sub(before))
+		}
+
+		d := deadline.Sub(before)
+		if d < lo {
+			lo = d
+		}
+		if d > hi {
+			hi = d
+		}
+	}
+
+	if hi-lo < 100*time.Millisecond {
+		t.Fatalf("spread too small: min %v, max %v", lo, hi)
 	}
 }

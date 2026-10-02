@@ -57,6 +57,8 @@ func (r *Raft) GetState() (int, bool) {
 	return r.currentTerm, r.state == leader
 }
 
-func (r *Raft) ResetElectionTimer() { // caller must hold r.mu
-	r.electionDeadline = time.Now().Add(150 * time.Millisecond).Add(time.Duration(r.rng.Int63n(int64(150))) * time.Millisecond)
+func (r *Raft) resetElectionTimerLocked() { // caller must hold r.mu
+	timeout := 150*time.Millisecond +
+		time.Duration(r.rng.Int63n(150))*time.Millisecond
+	r.electionDeadline = time.Now().Add(timeout)
 }

@@ -328,11 +328,11 @@ func TestLeaderStepDownResetsTimer(t *testing.T) {
 	r := New(0, []int{0, 1, 2}, fakeTransport{replyTerm: 9}, rand.New(rand.NewSource(1)))
 	r.mu.Lock()
 	r.state, r.currentTerm = leader, 1
-	r.electionDeadline = time.Now().Add(-time.Hour) // stale, like a long-running leader
+	r.electionDeadline = time.Now().Add(-time.Hour)
 	r.mu.Unlock()
 
 	go r.leaderLoop(1)
-	time.Sleep(100 * time.Millisecond) // one heartbeat round, then the loop exits
+	time.Sleep(100 * time.Millisecond)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -342,4 +342,56 @@ func TestLeaderStepDownResetsTimer(t *testing.T) {
 	if !r.electionDeadline.After(time.Now()) {
 		t.Fatal("stepping down left a stale election deadline; the ticker will start an election at once")
 	}
+}
+
+func TestAtMostOneLeaderPerTerm(t *testing.T) {
+	c := makeCluster(t, 5)
+	c.net.SetDropRate(0.2)
+	c.net.SetDelay(5*time.Millisecond, 40*time.Millisecond)
+	c.start()
+
+	leaderOfTerm := make(map[int]int) // term -> the node we saw lead it
+	isolated := -1
+	lastFlip := time.Now()
+	end := time.Now().Add(4 * time.Second)
+
+	for time.Now().Before(end) {
+		currentLeader := -1
+		for i, n := range c.nodes {
+			term, isLeader := n.GetState() // term and role read together under one lock
+			if !isLeader {
+				continue
+			}
+			if prev, ok := leaderOfTerm[term]; ok && prev != i {
+				t.Fatalf("two leaders in term %d: node %d and node %d", term, prev, i)
+			}
+			leaderOfTerm[term] = i
+			if i != isolated {
+				currentLeader = i
+			}
+		}
+
+		// Every ~600ms: isolate the current leader, or heal the network.
+		if time.Since(lastFlip) > 600*time.Millisecond {
+			if isolated == -1 {
+				if currentLeader != -1 {
+					c.net.Isolate(currentLeader)
+					isolated = currentLeader
+					lastFlip = time.Now()
+				}
+			} else {
+				c.net.Heal()
+				isolated = -1
+				lastFlip = time.Now()
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Guard against a test that passes because nothing happened.
+	if len(leaderOfTerm) < 2 {
+		t.Fatalf("only %d term(s) had a leader, the cluster didn't churn enough: %v",
+			len(leaderOfTerm), leaderOfTerm)
+	}
+	t.Logf("leaders by term: %v", leaderOfTerm)
 }

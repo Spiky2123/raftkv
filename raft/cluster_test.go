@@ -40,26 +40,30 @@ func (c *cluster) checkOneLeader(t *testing.T) int {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		leaderID := -1
-		for i, v := range c.nodes {
-			if c.connected[i] == false {
+		leaders := make(map[int][]int) // term -> leader IDs
+		for i, n := range c.nodes {
+			if !c.connected[i] {
 				continue
 			}
-			_, isLeader := v.GetState()
-			if isLeader {
-				if leaderID == -1 {
-					leaderID = v.id
-				} else {
-					t.Fatal("multiple leaders elected")
-				}
+			if term, isLeader := n.GetState(); isLeader {
+				leaders[term] = append(leaders[term], i)
 			}
 		}
-		if leaderID != -1 {
-			return leaderID
+		best := -1
+		bestID := -1
+		for term, ids := range leaders {
+			if len(ids) > 1 {
+				t.Fatalf("two leaders in term %d: %v", term, ids)
+			}
+			if term > best {
+				best, bestID = term, ids[0]
+			}
+		}
+		if bestID != -1 {
+			return bestID
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-
 	t.Fatal("no leader was elected")
 	return -1
 }

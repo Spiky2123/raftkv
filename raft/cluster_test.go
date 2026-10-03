@@ -139,3 +139,69 @@ func TestRequestVoteGrantsFreshFollower(t *testing.T) {
 		t.Fatalf("votedFor = %d, want 0", voter.votedFor)
 	}
 }
+
+func newVoter() *Raft {
+	return New(1, []int{0, 1, 2}, nil, rand.New(rand.NewSource(1)))
+}
+
+func requestVote(r *Raft, term, candidate int) RequestVoteReply {
+	args := RequestVoteArgs{Term: term, CandidateID: candidate}
+	return r.Handle("RequestVote", args).(RequestVoteReply)
+}
+
+func peek(r *Raft) (term, votedFor int, st State) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.currentTerm, r.votedFor, r.state
+}
+
+func TestVoteHigherTermOverridesOldVote(t *testing.T) {
+	v := newVoter()
+	requestVote(v, 1, 0)
+	reply := requestVote(v, 2, 2)
+	term, votedFor, _ := peek(v)
+	if !reply.VoteGranted || reply.Term != 2 || term != 2 || votedFor != 2 {
+		t.Fatalf("reply=%+v term=%d votedFor=%d, want granted, term 2, votedFor 2", reply, term, votedFor)
+	}
+}
+
+func TestVoteCandidateStepsDown(t *testing.T) {
+	v := newVoter()
+	v.mu.Lock()
+	v.state, v.currentTerm, v.votedFor = candidate, 3, v.id
+	v.mu.Unlock()
+	reply := requestVote(v, 4, 0)
+	_, _, st := peek(v)
+	if !reply.VoteGranted || st != follower {
+		t.Fatalf("reply=%+v state=%d, want granted and follower", reply, st)
+	}
+}
+
+func TestVoteLowerTermRejected(t *testing.T) {
+	v := newVoter()
+	v.mu.Lock()
+	v.currentTerm = 3
+	v.mu.Unlock()
+	reply := requestVote(v, 2, 0)
+	term, votedFor, _ := peek(v)
+	if reply.VoteGranted || reply.Term != 3 || term != 3 || votedFor != noVote {
+		t.Fatalf("reply=%+v term=%d votedFor=%d, want rejected, term 3, no vote", reply, term, votedFor)
+	}
+}
+
+func TestVoteSameTermOtherCandidateRejected(t *testing.T) {
+	v := newVoter()
+	requestVote(v, 1, 0)
+	reply := requestVote(v, 1, 2)
+	_, votedFor, _ := peek(v)
+	if reply.VoteGranted || votedFor != 0 {
+		t.Fatalf("reply=%+v votedFor=%d, want rejected and votedFor 0", reply, votedFor)
+	}
+}
+
+func TestVoteSameCandidateIdempotent(t *testing.T) {
+	v := newVoter()
+	if !requestVote(v, 1, 0).VoteGranted || !requestVote(v, 1, 0).VoteGranted {
+		t.Fatal("repeat request from the same candidate should be granted")
+	}
+}

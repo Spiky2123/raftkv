@@ -8,16 +8,19 @@ import (
 )
 
 type cluster struct {
-	net   *labnet.Network
-	nodes []*Raft
+	net       *labnet.Network
+	nodes     []*Raft
+	connected []bool
 }
 
 func makeCluster(t *testing.T, n int) *cluster {
 	net := labnet.NewNetwork(1)
 	nodes := make([]*Raft, n)
 	peers := make([]int, n)
+	connected := make([]bool, n)
 	for i := 0; i < n; i++ {
 		peers[i] = i
+		connected[i] = true
 	}
 	for i := 0; i < n; i++ {
 		rng := rand.New(rand.NewSource(int64(i)))
@@ -26,8 +29,9 @@ func makeCluster(t *testing.T, n int) *cluster {
 		net.Register(i, nodes[i].Handle)
 	}
 	c := cluster{
-		net:   net,
-		nodes: nodes,
+		net:       net,
+		nodes:     nodes,
+		connected: connected,
 	}
 	return &c
 }
@@ -37,7 +41,10 @@ func (c *cluster) checkOneLeader(t *testing.T) int {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		leaderID := -1
-		for _, v := range c.nodes {
+		for i, v := range c.nodes {
+			if c.connected[i] == false {
+				continue
+			}
 			_, isLeader := v.GetState()
 			if isLeader {
 				if leaderID == -1 {
@@ -55,6 +62,16 @@ func (c *cluster) checkOneLeader(t *testing.T) int {
 
 	t.Fatal("no leader was elected")
 	return -1
+}
+
+func (c *cluster) disconnect(i int) {
+	c.net.Isolate(i)
+	c.connected[i] = false
+}
+
+func (c *cluster) reconnect(i int) {
+	c.net.Heal()
+	c.connected[i] = true
 }
 
 func TestElection3(t *testing.T) {
@@ -266,5 +283,63 @@ func TestLeaderSendsHeartbeats(t *testing.T) {
 	if leader2 != leader || term2 != term {
 		t.Fatalf("leadership changed: leader %d->%d, term %d->%d (heartbeats are not keeping followers quiet)",
 			leader, leader2, term, term2)
+	}
+}
+
+func TestReElection(t *testing.T) {
+	c := makeCluster(t, 3)
+	c.start()
+
+	leader1 := c.checkOneLeader(t)
+	term1, _ := c.nodes[leader1].GetState()
+
+	c.disconnect(leader1)
+	leader2 := c.checkOneLeader(t)
+	term2, _ := c.nodes[leader2].GetState()
+	if leader2 == leader1 || term2 <= term1 {
+		t.Fatalf("expected a new leader in a higher term: leader %d->%d, term %d->%d",
+			leader1, leader2, term1, term2)
+	}
+
+	c.reconnect(leader1)
+	time.Sleep(1 * time.Second)
+
+	leader3 := c.checkOneLeader(t)
+	term3, _ := c.nodes[leader3].GetState()
+	if leader3 != leader2 || term3 != term2 {
+		t.Fatalf("returning node disrupted the cluster: leader %d->%d, term %d->%d",
+			leader2, leader3, term2, term3)
+	}
+	if _, isLeader := c.nodes[leader1].GetState(); isLeader {
+		t.Fatal("old leader still thinks it is leader")
+	}
+}
+
+type fakeTransport struct{ replyTerm int }
+
+func (f fakeTransport) Call(to int, method string, args, reply any) bool {
+	if r, ok := reply.(*AppendEntriesReply); ok {
+		r.Term = f.replyTerm
+	}
+	return true
+}
+
+func TestLeaderStepDownResetsTimer(t *testing.T) {
+	r := New(0, []int{0, 1, 2}, fakeTransport{replyTerm: 9}, rand.New(rand.NewSource(1)))
+	r.mu.Lock()
+	r.state, r.currentTerm = leader, 1
+	r.electionDeadline = time.Now().Add(-time.Hour) // stale, like a long-running leader
+	r.mu.Unlock()
+
+	go r.leaderLoop(1)
+	time.Sleep(100 * time.Millisecond) // one heartbeat round, then the loop exits
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.state != follower || r.currentTerm != 9 {
+		t.Fatalf("state=%d term=%d, want follower in term 9", r.state, r.currentTerm)
+	}
+	if !r.electionDeadline.After(time.Now()) {
+		t.Fatal("stepping down left a stale election deadline; the ticker will start an election at once")
 	}
 }

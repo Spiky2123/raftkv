@@ -54,9 +54,7 @@ func (r *Raft) Handle(method string, args any) any {
 		if request.Term < r.currentTerm {
 			return reply
 		} else if request.Term > r.currentTerm {
-			r.votedFor = noVote
-			r.currentTerm = request.Term
-			r.state = follower
+			r.becomeFollowerLocked(request.Term)
 		}
 
 		if r.votedFor == noVote || r.votedFor == request.CandidateID {
@@ -75,9 +73,7 @@ func (r *Raft) Handle(method string, args any) any {
 		if appendArgs.Term < r.currentTerm {
 			return reply
 		} else if appendArgs.Term > r.currentTerm {
-			r.votedFor = noVote
-			r.currentTerm = appendArgs.Term
-			r.state = follower
+			r.becomeFollowerLocked(appendArgs.Term)
 			reply.Term = r.currentTerm
 		}
 
@@ -103,10 +99,19 @@ func (r *Raft) Start() {
 	go r.ticker()
 }
 
-func (r *Raft) resetElectionTimerLocked() { // caller must hold r.mu
+// caller must hold r.mu
+func (r *Raft) resetElectionTimerLocked() {
 	timeout := 150*time.Millisecond +
 		time.Duration(r.rng.Int63n(150))*time.Millisecond
 	r.electionDeadline = time.Now().Add(timeout)
+}
+
+// caller must hold r.mu
+func (r *Raft) becomeFollowerLocked(term int) {
+	r.currentTerm = term
+	r.votedFor = noVote
+	r.state = follower
+	r.resetElectionTimerLocked()
 }
 
 func (r *Raft) leaderLoop(term int) {
@@ -126,9 +131,7 @@ func (r *Raft) leaderLoop(term int) {
 				if r.transport.Call(peer, "AppendEntries", args, &reply) {
 					r.mu.Lock()
 					if reply.Term > r.currentTerm {
-						r.currentTerm = reply.Term
-						r.votedFor = noVote
-						r.state = follower
+						r.becomeFollowerLocked(reply.Term)
 					}
 					r.mu.Unlock()
 				}
@@ -140,7 +143,8 @@ func (r *Raft) leaderLoop(term int) {
 
 }
 
-func (r *Raft) startElectionLocked() { // caller must hold r.mu
+// caller must hold r.mu
+func (r *Raft) startElectionLocked() {
 	r.resetElectionTimerLocked()
 	r.currentTerm++
 	r.state = candidate
@@ -158,9 +162,7 @@ func (r *Raft) startElectionLocked() { // caller must hold r.mu
 				r.mu.Lock()
 				defer r.mu.Unlock()
 				if reply.Term > r.currentTerm {
-					r.currentTerm = reply.Term
-					r.votedFor = noVote
-					r.state = follower
+					r.becomeFollowerLocked(reply.Term)
 					return
 				}
 				if r.currentTerm != electionTerm || r.state != candidate {

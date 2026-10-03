@@ -94,3 +94,24 @@ func TestElectionTimer(t *testing.T) {
 		t.Fatalf("spread too small: min %v, max %v", lo, hi)
 	}
 }
+
+func TestStartElection(t *testing.T) {
+	c := makeCluster(t, 3)
+
+	c.net.Isolate(1)
+	c.net.Isolate(2)
+
+	c.nodes[0].Start()
+	time.Sleep(600 * time.Millisecond)
+
+	term, isLeader := c.nodes[0].GetState()
+
+	t.Logf("term = %d", term)
+
+	if term == 0 {
+		t.Fatal("election did not start")
+	}
+	if isLeader {
+		t.Fatal("node won election without majority of the votes")
+	}
+}

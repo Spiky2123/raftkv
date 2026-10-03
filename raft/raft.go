@@ -68,7 +68,24 @@ func (r *Raft) Handle(method string, args any) any {
 		reply.Term = r.currentTerm
 		return reply
 	case "AppendEntries":
-		return nil
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		appendArgs := args.(AppendEntriesArgs)
+		reply := AppendEntriesReply{Term: r.currentTerm}
+		if appendArgs.Term < r.currentTerm {
+			return reply
+		} else if appendArgs.Term > r.currentTerm {
+			r.votedFor = noVote
+			r.currentTerm = appendArgs.Term
+			r.state = follower
+			reply.Term = r.currentTerm
+		}
+
+		if appendArgs.Term == r.currentTerm && r.state == candidate {
+			r.state = follower
+		}
+		r.resetElectionTimerLocked()
+		return reply
 	}
 	return nil
 }

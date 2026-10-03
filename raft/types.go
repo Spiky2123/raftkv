@@ -21,4 +21,7 @@ type AppendEntriesReply struct {
 	Term int // Current term so a stale leader learns it's behind
 }
 
-func init() { gob.Register(RequestVoteArgs{}) }
+func init() {
+	gob.Register(RequestVoteArgs{})
+	gob.Register(AppendEntriesArgs{})
+}

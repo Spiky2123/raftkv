@@ -20,6 +20,7 @@ type Raft struct {
 	mu               sync.Mutex
 	id               int
 	state            State
+	dead             bool
 	currentTerm      int
 	votedFor         int
 	electionDeadline time.Time
@@ -32,6 +33,7 @@ func New(id int, peers []int, transport Transport, rng *rand.Rand) *Raft {
 	raft := Raft{
 		id:          id,
 		state:       follower,
+		dead:        false,
 		currentTerm: 0,
 		votedFor:    noVote,
 		peers:       peers,
@@ -50,6 +52,9 @@ func (r *Raft) Handle(method string, args any) any {
 		reply := RequestVoteReply{
 			Term:        r.currentTerm,
 			VoteGranted: false,
+		}
+		if r.dead {
+			return reply
 		}
 		if request.Term < r.currentTerm {
 			return reply
@@ -70,6 +75,9 @@ func (r *Raft) Handle(method string, args any) any {
 		defer r.mu.Unlock()
 		appendArgs := args.(AppendEntriesArgs)
 		reply := AppendEntriesReply{Term: r.currentTerm}
+		if r.dead {
+			return reply
+		}
 		if appendArgs.Term < r.currentTerm {
 			return reply
 		} else if appendArgs.Term > r.currentTerm {
@@ -99,6 +107,12 @@ func (r *Raft) Start() {
 	go r.ticker()
 }
 
+func (r *Raft) Kill() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.dead = true
+}
+
 // caller must hold r.mu
 func (r *Raft) resetElectionTimerLocked() {
 	timeout := 150*time.Millisecond +
@@ -117,6 +131,10 @@ func (r *Raft) becomeFollowerLocked(term int) {
 func (r *Raft) leaderLoop(term int) {
 	for {
 		r.mu.Lock()
+		if r.dead {
+			r.mu.Unlock()
+			return
+		}
 		if r.state != leader || r.currentTerm != term {
 			r.mu.Unlock()
 			return
@@ -184,6 +202,10 @@ func (r *Raft) startElectionLocked() {
 func (r *Raft) ticker() {
 	for {
 		r.mu.Lock()
+		if r.dead {
+			r.mu.Unlock()
+			return
+		}
 		if time.Now().After(r.electionDeadline) && r.state != leader {
 			r.startElectionLocked()
 		}

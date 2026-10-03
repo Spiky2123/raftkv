@@ -3,6 +3,7 @@ package raft
 import (
 	"math/rand"
 	"raftkv/labnet"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -76,6 +77,11 @@ func (c *cluster) disconnect(i int) {
 func (c *cluster) reconnect(i int) {
 	c.net.Heal()
 	c.connected[i] = true
+}
+
+func (c *cluster) kill(i int) {
+	c.nodes[i].Kill()
+	c.net.Unregister(i)
 }
 
 func TestElection3(t *testing.T) {
@@ -398,4 +404,36 @@ func TestAtMostOneLeaderPerTerm(t *testing.T) {
 			len(leaderOfTerm), leaderOfTerm)
 	}
 	t.Logf("leaders by term: %v", leaderOfTerm)
+}
+
+func TestKillStopsGoroutines(t *testing.T) {
+	before := runtime.NumGoroutine()
+	c := makeCluster(t, 3)
+	c.start()
+	c.checkOneLeader(t) // a leaderLoop is running too
+
+	for _, n := range c.nodes {
+		n.Kill()
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if runtime.NumGoroutine() <= before+2 { // small slack for in-flight RPC goroutines
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("goroutines still running: before=%d now=%d", before, runtime.NumGoroutine())
+}
+
+func TestKilledNodeStaysDead(t *testing.T) {
+	r := newVoter()
+	r.Kill()
+
+	reply := requestVote(r, 5, 0)
+
+	term, votedFor, _ := peek(r)
+	if reply.VoteGranted || term == 5 || votedFor != noVote {
+		t.Fatalf("killed node reacted: reply=%+v term=%d votedFor=%d", reply, term, votedFor)
+	}
 }

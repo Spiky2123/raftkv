@@ -1,5 +1,7 @@
 package raft
 
+import "encoding/gob"
+
 type RequestVoteArgs struct {
 	Term        int // The candidate's term
 	CandidateID int // ID of the node requesting the vote
@@ -18,3 +20,5 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	Term int // Current term so a stale leader learns it's behind
 }
+
+func init() { gob.Register(RequestVoteArgs{}) }

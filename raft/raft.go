@@ -97,6 +97,37 @@ func (r *Raft) startElectionLocked() { // caller must hold r.mu
 	r.currentTerm++
 	r.state = candidate
 	r.votedFor = r.id
+	req := RequestVoteArgs{Term: r.currentTerm, CandidateID: r.id}
+	electionTerm := r.currentTerm
+	votes := 1
+	for _, v := range r.peers {
+		if v == r.id {
+			continue
+		}
+		go func(peer int) {
+			var reply RequestVoteReply
+			if r.transport.Call(peer, "RequestVote", req, &reply) {
+				r.mu.Lock()
+				defer r.mu.Unlock()
+				if reply.Term > r.currentTerm {
+					r.currentTerm = reply.Term
+					r.votedFor = noVote
+					r.state = follower
+					return
+				}
+				if r.currentTerm != electionTerm || r.state != candidate {
+					return
+				}
+				if reply.VoteGranted {
+					votes++
+					if votes >= len(r.peers)/2+1 {
+						r.state = leader
+					}
+					return
+				}
+			}
+		}(v)
+	}
 }
 
 func (r *Raft) ticker() {

@@ -205,3 +205,36 @@ func TestVoteSameCandidateIdempotent(t *testing.T) {
 		t.Fatal("repeat request from the same candidate should be granted")
 	}
 }
+
+func TestCandidateWins(t *testing.T) {
+	c := makeCluster(t, 3)
+	c.nodes[0].Start()
+	deadline := time.Now().Add(2 * time.Second)
+
+	for time.Now().Before(deadline) {
+		_, isLeader := c.nodes[0].GetState()
+
+		if isLeader {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("node 0 failed to be elected as leader")
+}
+
+func TestCandidateWinsWithOneNodeDown(t *testing.T) {
+	c := makeCluster(t, 3)
+	c.net.Isolate(2)
+	c.nodes[0].Start()
+	deadline := time.Now().Add(2 * time.Second)
+
+	for time.Now().Before(deadline) {
+		_, isLeader := c.nodes[0].GetState()
+
+		if isLeader {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("node 0 failed to be elected as leader")
+}

@@ -115,3 +115,27 @@ func TestStartElection(t *testing.T) {
 		t.Fatal("node won election without majority of the votes")
 	}
 }
+
+func TestRequestVoteGrantsFreshFollower(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	voter := New(1, []int{0, 1, 2}, nil, rng)
+
+	args := RequestVoteArgs{Term: 1, CandidateID: 0}
+	reply := voter.Handle("RequestVote", args).(RequestVoteReply)
+
+	if !reply.VoteGranted {
+		t.Fatal("VoteGranted = false, want true")
+	}
+	if reply.Term != 1 {
+		t.Fatalf("reply.Term = %d, want 1", reply.Term)
+	}
+
+	voter.mu.Lock()
+	defer voter.mu.Unlock()
+	if voter.currentTerm != 1 {
+		t.Fatalf("currentTerm = %d, want 1", voter.currentTerm)
+	}
+	if voter.votedFor != 0 {
+		t.Fatalf("votedFor = %d, want 0", voter.votedFor)
+	}
+}

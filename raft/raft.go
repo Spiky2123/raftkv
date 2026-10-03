@@ -44,7 +44,29 @@ func New(id int, peers []int, transport Transport, rng *rand.Rand) *Raft {
 func (r *Raft) Handle(method string, args any) any {
 	switch method {
 	case "RequestVote":
-		return nil
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		request := args.(RequestVoteArgs)
+		reply := RequestVoteReply{
+			Term:        r.currentTerm,
+			VoteGranted: false,
+		}
+		if request.Term < r.currentTerm {
+			return reply
+		} else if request.Term > r.currentTerm {
+			r.votedFor = noVote
+			r.currentTerm = request.Term
+			r.state = follower
+		}
+
+		if r.votedFor == noVote || r.votedFor == request.CandidateID {
+			r.votedFor = request.CandidateID
+			r.resetElectionTimerLocked()
+
+			reply.VoteGranted = true
+		}
+		reply.Term = r.currentTerm
+		return reply
 	case "AppendEntries":
 		return nil
 	}

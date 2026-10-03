@@ -109,6 +109,37 @@ func (r *Raft) resetElectionTimerLocked() { // caller must hold r.mu
 	r.electionDeadline = time.Now().Add(timeout)
 }
 
+func (r *Raft) leaderLoop(term int) {
+	for {
+		r.mu.Lock()
+		if r.state != leader || r.currentTerm != term {
+			r.mu.Unlock()
+			return
+		}
+		args := AppendEntriesArgs{Term: term, LeaderID: r.id}
+		for _, v := range r.peers {
+			if v == r.id {
+				continue
+			}
+			go func(peer int) {
+				var reply AppendEntriesReply
+				if r.transport.Call(peer, "AppendEntries", args, &reply) {
+					r.mu.Lock()
+					if reply.Term > r.currentTerm {
+						r.currentTerm = reply.Term
+						r.votedFor = noVote
+						r.state = follower
+					}
+					r.mu.Unlock()
+				}
+			}(v)
+		}
+		r.mu.Unlock()
+		time.Sleep(50 * time.Millisecond)
+	}
+
+}
+
 func (r *Raft) startElectionLocked() { // caller must hold r.mu
 	r.resetElectionTimerLocked()
 	r.currentTerm++
@@ -139,6 +170,7 @@ func (r *Raft) startElectionLocked() { // caller must hold r.mu
 					votes++
 					if votes >= len(r.peers)/2+1 {
 						r.state = leader
+						go r.leaderLoop(electionTerm)
 					}
 					return
 				}

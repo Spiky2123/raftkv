@@ -58,8 +58,8 @@ func (c *cluster) checkOneLeader(t *testing.T) int {
 }
 
 func TestElection3(t *testing.T) {
-	t.Skip("election not implemented yet")
 	c := makeCluster(t, 3)
+	c.start()
 	c.checkOneLeader(t)
 }
 
@@ -237,4 +237,28 @@ func TestCandidateWinsWithOneNodeDown(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("node 0 failed to be elected as leader")
+}
+
+// start launches every node's ticker.
+func (c *cluster) start() {
+	for _, n := range c.nodes {
+		n.Start()
+	}
+}
+
+func TestLeaderSendsHeartbeats(t *testing.T) {
+	c := makeCluster(t, 3)
+	c.start()
+
+	leader := c.checkOneLeader(t)
+	term, _ := c.nodes[leader].GetState()
+
+	time.Sleep(1 * time.Second)
+
+	leader2 := c.checkOneLeader(t)
+	term2, _ := c.nodes[leader2].GetState()
+	if leader2 != leader || term2 != term {
+		t.Fatalf("leadership changed: leader %d->%d, term %d->%d (heartbeats are not keeping followers quiet)",
+			leader, leader2, term, term2)
+	}
 }

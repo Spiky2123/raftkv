@@ -63,6 +63,12 @@ func TestElection3(t *testing.T) {
 	c.checkOneLeader(t)
 }
 
+func TestElection5(t *testing.T) {
+	c := makeCluster(t, 5)
+	c.start()
+	c.checkOneLeader(t)
+}
+
 func TestElectionTimer(t *testing.T) {
 	c := makeCluster(t, 1)
 	lo := 50 * time.Second

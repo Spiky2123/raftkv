@@ -24,4 +24,5 @@ type AppendEntriesReply struct {
 func init() {
 	gob.Register(RequestVoteArgs{})
 	gob.Register(AppendEntriesArgs{})
+	gob.Register(LogEntry{})
 }

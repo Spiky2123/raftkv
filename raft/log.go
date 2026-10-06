@@ -25,6 +25,13 @@ func (l *Log) Append(entry LogEntry) int {
 	return len(l.entries) - 1
 }
 
+func (l *Log) TruncateFrom(index int) {
+	if len(l.entries) <= index || index <= 0 {
+		return
+	}
+	l.entries = l.entries[:index]
+}
+
 func newLog() *Log {
 	return &Log{entries: make([]LogEntry, 1)}
 }

@@ -189,3 +189,153 @@ func TestAppendEntriesSuccessWithLongerLog(t *testing.T) {
 		t.Fatalf("expected Success=true for PrevLogIndex 1 / PrevLogTerm 1, got false (reply term %v)", reply.Term)
 	}
 }
+
+func TestAppendEntriesAppendsNewEntries(t *testing.T) {
+	r := newVoter()
+
+	args := AppendEntriesArgs{
+		Term:         1,
+		LeaderID:     0,
+		PrevLogIndex: 0,
+		PrevLogTerm:  0,
+		Entries:      []LogEntry{{Term: 1, Command: "a"}, {Term: 1, Command: "b"}},
+	}
+
+	reply, ok := r.Handle("AppendEntries", args).(AppendEntriesReply)
+	if !ok {
+		t.Fatal("Handle did not return an AppendEntriesReply value")
+	}
+
+	if !reply.Success {
+		t.Fatalf("expected Success=true for PrevLogIndex 0 / PrevLogTerm 0, got false (reply term %v)", reply.Term)
+	}
+
+	if r.log.LastIndex() != 2 {
+		t.Fatalf("expected to have last index 2 after rpc, has last index %v instead", r.log.LastIndex())
+	}
+
+	if r.log.TermAt(2) != 1 {
+		t.Fatalf("expected LogEntry number 2 to have term 1, has term %v instead", r.log.TermAt(2))
+	}
+}
+
+func TestAppendEntriesKeepsMatchingSuffix(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	r.currentTerm = 1
+	r.log.Append(LogEntry{Term: 1})
+	r.log.Append(LogEntry{Term: 1})
+	r.log.Append(LogEntry{Term: 1})
+	r.mu.Unlock()
+
+	args := AppendEntriesArgs{
+		Term:         1,
+		LeaderID:     0,
+		PrevLogIndex: 1,
+		PrevLogTerm:  1,
+		Entries:      []LogEntry{{Term: 1}},
+	}
+
+	reply, ok := r.Handle("AppendEntries", args).(AppendEntriesReply)
+	if !ok {
+		t.Fatal("Handle did not return an AppendEntriesReply value")
+	}
+
+	if !reply.Success {
+		t.Fatalf("expected Success=true for PrevLogIndex 0 / PrevLogTerm 0, got false (reply term %v)", reply.Term)
+	}
+
+	if r.log.LastIndex() != 3 {
+		t.Fatalf("expected to have last index 3 after rpc, has last index %v instead", r.log.LastIndex())
+	}
+
+	if r.log.TermAt(2) != 1 {
+		t.Fatalf("expected LogEntry number 2 to have term 1, has term %v instead", r.log.TermAt(2))
+	}
+}
+
+func TestAppendEntriesTruncatesConflict(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	r.currentTerm = 1
+	r.log.Append(LogEntry{Term: 1})
+	r.log.Append(LogEntry{Term: 1})
+	r.log.Append(LogEntry{Term: 1})
+	r.mu.Unlock()
+
+	args := AppendEntriesArgs{
+		Term:         2,
+		LeaderID:     0,
+		PrevLogIndex: 1,
+		PrevLogTerm:  1,
+		Entries:      []LogEntry{{Term: 2}, {Term: 2}},
+	}
+
+	reply, ok := r.Handle("AppendEntries", args).(AppendEntriesReply)
+	if !ok {
+		t.Fatal("Handle did not return an AppendEntriesReply value")
+	}
+
+	if !reply.Success {
+		t.Fatalf("expected Success=true for PrevLogIndex 0 / PrevLogTerm 0, got false (reply term %v)", reply.Term)
+	}
+
+	if r.log.LastIndex() != 3 {
+		t.Fatalf("expected to have last index 3 after rpc, has last index %v instead", r.log.LastIndex())
+	}
+
+	if r.log.TermAt(2) != 2 {
+		t.Fatalf("expected LogEntry number 2 to have term 1, has term %v instead", r.log.TermAt(2))
+	}
+}
+
+func TestHeartbeatDoesNotTruncate(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	r.currentTerm = 1
+	r.log.Append(LogEntry{Term: 1})
+	r.log.Append(LogEntry{Term: 1})
+	r.log.Append(LogEntry{Term: 1})
+	r.mu.Unlock()
+
+	args := AppendEntriesArgs{Term: 1, LeaderID: 0, PrevLogIndex: 0, PrevLogTerm: 0}
+
+	reply, ok := r.Handle("AppendEntries", args).(AppendEntriesReply)
+	if !ok {
+		t.Fatal("Handle did not return an AppendEntriesReply value")
+	}
+	if !reply.Success {
+		t.Fatalf("expected Success=true, got false (reply term %v)", reply.Term)
+	}
+	if r.log.LastIndex() != 3 {
+		t.Fatalf("heartbeat changed the log: last index is %v instead of 3", r.log.LastIndex())
+	}
+}
+
+func TestAppendEntriesSkipsMatchingThenAppends(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	r.currentTerm = 1
+	r.log.Append(LogEntry{Term: 1})
+	r.log.Append(LogEntry{Term: 1})
+	r.mu.Unlock()
+
+	args := AppendEntriesArgs{
+		Term:         1,
+		LeaderID:     0,
+		PrevLogIndex: 0,
+		PrevLogTerm:  0,
+		Entries:      []LogEntry{{Term: 1}, {Term: 1}, {Term: 1}, {Term: 1}},
+	}
+
+	reply, ok := r.Handle("AppendEntries", args).(AppendEntriesReply)
+	if !ok {
+		t.Fatal("Handle did not return an AppendEntriesReply value")
+	}
+	if !reply.Success {
+		t.Fatalf("expected Success=true, got false (reply term %v)", reply.Term)
+	}
+	if r.log.LastIndex() != 4 {
+		t.Fatalf("expected last index 4 after rpc, got %v", r.log.LastIndex())
+	}
+}

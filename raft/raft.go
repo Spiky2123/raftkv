@@ -95,6 +95,19 @@ func (r *Raft) Handle(method string, args any) any {
 
 		if r.log.TermAt(appendArgs.PrevLogIndex) == appendArgs.PrevLogTerm {
 			reply.Success = true
+			for k, entry := range appendArgs.Entries {
+				index := appendArgs.PrevLogIndex + 1 + k
+				if r.log.TermAt(index) == -1 {
+					r.log.Append(entry)
+				} else {
+					if r.log.TermAt(index) != entry.Term {
+						r.log.TruncateFrom(index)
+						r.log.Append(entry)
+					} else {
+						continue
+					}
+				}
+			}
 		}
 
 		return reply

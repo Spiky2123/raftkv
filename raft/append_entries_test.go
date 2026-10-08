@@ -96,3 +96,96 @@ func TestHeartbeatSameTermKeepsVote(t *testing.T) {
 		t.Fatalf("votedFor=%d, want 0 (same-term heartbeat must keep the vote)", votedFor)
 	}
 }
+
+func TestAppendEntriesSuccessOnMatchingPrev(t *testing.T) {
+	r := newVoter() // use the same setup line as your TestHeartbeat* tests
+
+	args := AppendEntriesArgs{
+		Term:         1,
+		LeaderID:     0,
+		PrevLogIndex: 0,
+		PrevLogTerm:  0,
+	}
+
+	reply, ok := r.Handle("AppendEntries", args).(AppendEntriesReply)
+	if !ok {
+		t.Fatal("Handle did not return an AppendEntriesReply value")
+	}
+
+	if !reply.Success {
+		t.Fatalf("expected Success=true for PrevLogIndex 0 / PrevLogTerm 0 on an empty log, got false (reply term %v)", reply.Term)
+	}
+}
+
+func TestAppendEntriesRejectsMissingPrev(t *testing.T) {
+	r := newVoter()
+
+	args := AppendEntriesArgs{
+		Term:         1,
+		LeaderID:     0,
+		PrevLogIndex: 5,
+		PrevLogTerm:  1,
+	}
+
+	reply, ok := r.Handle("AppendEntries", args).(AppendEntriesReply)
+	if !ok {
+		t.Fatal("Handle did not return an AppendEntriesReply value")
+	}
+
+	if reply.Success {
+		t.Fatalf("expected Success=false for PrevLogIndex 5 / PrevLogTerm 1 on an empty log, got true (reply term %v)", reply.Term)
+	}
+}
+
+func TestAppendEntriesStaleTermFails(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	r.currentTerm = 5
+	r.mu.Unlock()
+
+	args := AppendEntriesArgs{
+		Term:         3,
+		LeaderID:     0,
+		PrevLogIndex: 0,
+		PrevLogTerm:  0,
+	}
+
+	reply, ok := r.Handle("AppendEntries", args).(AppendEntriesReply)
+	if !ok {
+		t.Fatal("Handle did not return an AppendEntriesReply value")
+	}
+
+	if reply.Success {
+		t.Fatalf("expected Success=false for Term 3 on an empty log, got true (reply term %v)", reply.Term)
+	}
+
+	if reply.Term != 5 {
+		t.Fatalf("expected reply term to be 5, got %v instead", reply.Term)
+	}
+}
+
+func TestAppendEntriesSuccessWithLongerLog(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	r.currentTerm = 1
+	r.log.Append(LogEntry{Term: 1})
+	r.log.Append(LogEntry{Term: 1})
+	r.log.Append(LogEntry{Term: 1})
+	r.mu.Unlock()
+
+	args := AppendEntriesArgs{
+		Term:         1,
+		LeaderID:     0,
+		PrevLogIndex: 1,
+		PrevLogTerm:  1,
+	}
+
+	reply, ok := r.Handle("AppendEntries", args).(AppendEntriesReply)
+	if !ok {
+		t.Fatal("Handle did not return an AppendEntriesReply value")
+	}
+
+	if !reply.Success {
+		t.Fatalf("expected Success=true for PrevLogIndex 1 / PrevLogTerm 1, got false (reply term %v)", reply.Term)
+	}
+}

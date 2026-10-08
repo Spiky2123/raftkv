@@ -22,6 +22,7 @@ type Raft struct {
 	state            State
 	dead             bool
 	currentTerm      int
+	log              *Log
 	votedFor         int
 	electionDeadline time.Time
 	peers            []int
@@ -35,6 +36,7 @@ func New(id int, peers []int, transport Transport, rng *rand.Rand) *Raft {
 		state:       follower,
 		dead:        false,
 		currentTerm: 0,
+		log:         newLog(),
 		votedFor:    noVote,
 		peers:       peers,
 		transport:   transport,
@@ -74,7 +76,7 @@ func (r *Raft) Handle(method string, args any) any {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		appendArgs := args.(AppendEntriesArgs)
-		reply := AppendEntriesReply{Term: r.currentTerm}
+		reply := AppendEntriesReply{Term: r.currentTerm, Success: false}
 		if r.dead {
 			return reply
 		}
@@ -88,7 +90,13 @@ func (r *Raft) Handle(method string, args any) any {
 		if appendArgs.Term == r.currentTerm && r.state == candidate {
 			r.state = follower
 		}
+
 		r.resetElectionTimerLocked()
+
+		if r.log.TermAt(appendArgs.PrevLogIndex) == appendArgs.PrevLogTerm {
+			reply.Success = true
+		}
+
 		return reply
 	}
 	return nil

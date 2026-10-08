@@ -13,12 +13,15 @@ type RequestVoteReply struct {
 }
 
 type AppendEntriesArgs struct {
-	Term     int // Leader's term
-	LeaderID int // Leaders ID
+	Term         int // Leader's term
+	LeaderID     int // Leaders ID
+	PrevLogTerm  int
+	PrevLogIndex int
 }
 
 type AppendEntriesReply struct {
-	Term int // Current term so a stale leader learns it's behind
+	Term    int // Current term so a stale leader learns it's behind
+	Success bool
 }
 
 func init() {

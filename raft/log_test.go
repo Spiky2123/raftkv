@@ -119,3 +119,48 @@ func TestLogTruncateAtMissing(t *testing.T) {
 		t.Fatalf("expected last index to be 2, was %v instead", l.LastIndex())
 	}
 }
+
+func TestLogSliceIsCopy(t *testing.T) {
+	l := newLog()
+	entry1 := LogEntry{Term: 1}
+	entry2 := LogEntry{Term: 1}
+	entry3 := LogEntry{Term: 2}
+
+	l.Append(entry1)
+	l.Append(entry2)
+	l.Append(entry3)
+
+	s := l.Slice(2)
+
+	if len(s) != 2 {
+		t.Fatalf("expected slice to have length 2, has length %v instead", len(s))
+	}
+
+	if s[1].Term != 2 {
+		t.Fatalf("expected second log entry to have term 2, has term %v instead", s[1].Term)
+	}
+
+	l.TruncateFrom(2)
+	l.Append(LogEntry{Term: 5})
+
+	if s[0].Term != 1 {
+		t.Fatalf("first log entry term changed from 1 to %v", s[0].Term)
+	}
+}
+
+func TestLogSliceEmpty(t *testing.T) {
+	l := newLog()
+	entry1 := LogEntry{Term: 1}
+	entry2 := LogEntry{Term: 1}
+	entry3 := LogEntry{Term: 2}
+
+	l.Append(entry1)
+	l.Append(entry2)
+	l.Append(entry3)
+
+	s := l.Slice(len(l.entries) + 1)
+
+	if len(s) != 0 {
+		t.Fatal("expected invalid slice to have length 0")
+	}
+}

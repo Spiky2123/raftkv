@@ -32,6 +32,16 @@ func (l *Log) TruncateFrom(index int) {
 	l.entries = l.entries[:index]
 }
 
+func (l *Log) Slice(from int) []LogEntry {
+	s := make([]LogEntry, 0)
+	if from <= 0 || from >= len(l.entries) {
+		return s
+	}
+	s = make([]LogEntry, len(l.entries)-from)
+	copy(s, l.entries[from:])
+	return s
+}
+
 func newLog() *Log {
 	return &Log{entries: make([]LogEntry, 1)}
 }

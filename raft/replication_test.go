@@ -1,6 +1,8 @@
 package raft
 
 import (
+	"fmt"
+	"math/rand"
 	"testing"
 	"time"
 )
@@ -479,4 +481,111 @@ func TestFollowerCatchUp(t *testing.T) {
 			t.Fatalf("node %d applied %v at index %d, expected %q", follower, got, idx, want)
 		}
 	}
+}
+
+func TestLeaderChangeWithUncommitted(t *testing.T) {
+	c := makeCluster(t, 3)
+	c.start()
+
+	c.one(t, "a", 3)
+	old := c.checkOneLeader(t)
+
+	c.disconnect(old)
+	c.nodes[old].Submit("x") // never leaves the old leader
+	c.nodes[old].Submit("y")
+
+	c.one(t, "b", 2) // the two connected nodes elect a new leader and commit b
+
+	c.reconnect(old)
+	c.one(t, "c", 3)
+
+	c.applyMu.Lock()
+	defer c.applyMu.Unlock()
+	for node := range c.applied {
+		for idx, cmd := range c.applied[node] {
+			if cmd == "x" || cmd == "y" {
+				t.Fatalf("node %d applied uncommitted command %v at index %d", node, cmd, idx)
+			}
+		}
+	}
+	if got := c.applied[old][2]; got != "b" {
+		t.Fatalf("old leader applied %v at index 2, expected \"b\"", got)
+	}
+}
+
+func TestChurn5(t *testing.T) {
+	runChurn(t, 1, 0)
+}
+
+func TestChurn5Unreliable(t *testing.T) {
+	runChurn(t, 2, 0.1)
+}
+
+// runChurn repeatedly partitions up to 2 of 5 nodes while submitting commands to
+// every node, then heals and checks that the cluster converges with no divergence.
+// The network flips and the submissions all run on the test goroutine, so
+// c.connected needs no lock.
+func runChurn(t *testing.T, seed int64, dropRate float64) {
+	t.Logf("seed %d, drop rate %v", seed, dropRate)
+	rng := rand.New(rand.NewSource(seed))
+	c := makeCluster(t, 5)
+	if dropRate > 0 {
+		c.net.SetDropRate(dropRate)
+		c.net.SetDelay(time.Millisecond, 20*time.Millisecond)
+	}
+	c.start()
+	c.one(t, "start", 5)
+
+	nextCmd := 0
+	nextFlip := time.Now()
+	end := time.Now().Add(4 * time.Second)
+	for time.Now().Before(end) {
+		if !time.Now().Before(nextFlip) {
+			c.net.Heal()
+			for i := range c.connected {
+				c.connected[i] = true
+			}
+			// isolate 0, 1 or 2 nodes, so a majority of 3 can always exist
+			for _, i := range rng.Perm(len(c.nodes))[:rng.Intn(3)] {
+				c.net.Isolate(i)
+				c.connected[i] = false
+			}
+			nextFlip = time.Now().Add(time.Duration(200+rng.Intn(200)) * time.Millisecond)
+		}
+
+		// Submit to every node, isolated ones included. Only leaders accept, and a
+		// stale isolated leader builds up uncommitted entries that must later be overwritten.
+		for _, n := range c.nodes {
+			n.Submit(fmt.Sprintf("cmd-%d", nextCmd))
+			nextCmd++
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Heal everything, make the network reliable, and require full convergence.
+	c.net.Heal()
+	c.net.SetDropRate(0)
+	c.net.SetDelay(0, 0)
+	for i := range c.connected {
+		c.connected[i] = true
+	}
+	last := c.one(t, "final", 5)
+
+	// Everything up to `last` must be identical on every node. The applier delivers
+	// in order, so all five nodes have applied 1..last with no gaps.
+	c.applyMu.Lock()
+	defer c.applyMu.Unlock()
+	for idx := 1; idx <= last; idx++ {
+		want, ok := c.applied[0][idx]
+		if !ok {
+			t.Fatalf("node 0 never applied index %d (gap before %d)", idx, last)
+		}
+		for node := 1; node < len(c.applied); node++ {
+			got, ok := c.applied[node][idx]
+			if !ok || got != want {
+				t.Fatalf("index %d: node 0 has %v, node %d has %v (present=%v)", idx, want, node, got, ok)
+			}
+		}
+	}
+	t.Logf("converged: %d entries applied, %d commands submitted", last, nextCmd)
 }

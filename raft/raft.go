@@ -29,6 +29,7 @@ type Raft struct {
 	nextIndex        []int
 	matchIndex       []int
 	commitIndex      int
+	lastApplied      int
 	transport        Transport
 	rng              *rand.Rand
 }
@@ -45,6 +46,7 @@ func New(id int, peers []int, transport Transport, rng *rand.Rand) *Raft {
 		nextIndex:   make([]int, len(peers)),
 		matchIndex:  make([]int, len(peers)),
 		commitIndex: 0,
+		lastApplied: 0,
 		transport:   transport,
 		rng:         rng,
 	}
@@ -151,6 +153,24 @@ func (r *Raft) Kill() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.dead = true
+}
+
+// caller must hold r.mu
+func (r *Raft) collectApplyLocked() []ApplyMsg {
+	n := r.commitIndex - r.lastApplied
+	if n <= 0 {
+		return []ApplyMsg{}
+	}
+	slice := r.log.Slice(r.lastApplied + 1)
+	result := make([]ApplyMsg, n)
+	for i := range result {
+		result[i].Command = slice[i].Command
+		result[i].Index = r.lastApplied + 1 + i
+	}
+	if r.lastApplied < r.commitIndex {
+		r.lastApplied = r.commitIndex
+	}
+	return result
 }
 
 // caller must hold r.mu

@@ -26,6 +26,11 @@ type AppendEntriesReply struct {
 	Success bool
 }
 
+type ApplyMsg struct {
+	Index   int
+	Command any
+}
+
 func init() {
 	gob.Register(RequestVoteArgs{})
 	gob.Register(AppendEntriesArgs{})

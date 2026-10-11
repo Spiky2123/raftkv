@@ -323,3 +323,37 @@ func TestAdvanceCommitIndexNeverDecreases(t *testing.T) {
 		t.Fatal("commit index decreased")
 	}
 }
+
+func TestCollectApplyMessages(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.log.Append(LogEntry{Term: 1, Command: "a"})
+	r.log.Append(LogEntry{Term: 1, Command: "b"})
+	r.log.Append(LogEntry{Term: 1, Command: "c"})
+
+	if msgs := r.collectApplyLocked(); len(msgs) != 0 {
+		t.Fatalf("nothing is committed, got %d messages", len(msgs))
+	}
+
+	r.commitIndex = 2
+	msgs := r.collectApplyLocked()
+	if len(msgs) != 2 || msgs[0].Index != 1 || msgs[0].Command != "a" ||
+		msgs[1].Index != 2 || msgs[1].Command != "b" {
+		t.Fatalf("expected [1:a 2:b], got %+v", msgs)
+	}
+	if r.lastApplied != 2 {
+		t.Fatalf("lastApplied is %v, expected 2", r.lastApplied)
+	}
+
+	if msgs := r.collectApplyLocked(); len(msgs) != 0 {
+		t.Fatalf("entries delivered twice: %+v", msgs)
+	}
+
+	r.commitIndex = 3
+	msgs = r.collectApplyLocked()
+	if len(msgs) != 1 || msgs[0].Index != 3 || msgs[0].Command != "c" {
+		t.Fatalf("expected [3:c], got %+v", msgs)
+	}
+}

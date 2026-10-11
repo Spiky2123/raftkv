@@ -436,3 +436,47 @@ func TestAgree3(t *testing.T) {
 		}
 	}
 }
+
+func TestNoCommitWithoutMajority(t *testing.T) {
+	c := makeCluster(t, 3)
+	c.start()
+	leader := c.checkOneLeader(t)
+
+	c.disconnect((leader + 1) % 3)
+	c.disconnect((leader + 2) % 3)
+
+	index, _, ok := c.nodes[leader].Submit("x")
+	if !ok {
+		t.Fatal("expected the node to still be leader")
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	if n, _ := c.nCommitted(index); n != 0 {
+		t.Fatalf("%d nodes applied index %d without a majority", n, index)
+	}
+}
+
+func TestFollowerCatchUp(t *testing.T) {
+	c := makeCluster(t, 3)
+	c.start()
+	leader := c.checkOneLeader(t)
+
+	c.one(t, "a", 3)
+
+	follower := (leader + 1) % 3
+	c.disconnect(follower)
+	c.one(t, "b", 2)
+	c.one(t, "c", 2)
+
+	c.reconnect(follower)
+	c.one(t, "d", 3)
+
+	// the applier delivers in order, so seeing index 4 means 2 and 3 arrived first
+	c.applyMu.Lock()
+	defer c.applyMu.Unlock()
+	for idx, want := range map[int]string{2: "b", 3: "c"} {
+		if got := c.applied[follower][idx]; got != want {
+			t.Fatalf("node %d applied %v at index %d, expected %q", follower, got, idx, want)
+		}
+	}
+}

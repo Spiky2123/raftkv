@@ -4,14 +4,21 @@ import (
 	"math/rand"
 	"raftkv/labnet"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 )
 
 type cluster struct {
+	t         *testing.T
 	net       *labnet.Network
 	nodes     []*Raft
 	connected []bool
+	applyMu   sync.Mutex
+	applied   []map[int]any // per node: log index -> command
+	stop      chan struct{}
+	stopOnce  sync.Once
+	wg        sync.WaitGroup
 }
 
 func makeCluster(t *testing.T, n int) *cluster {
@@ -29,12 +36,20 @@ func makeCluster(t *testing.T, n int) *cluster {
 		nodes[i] = New(i, peers, end, rng)
 		net.Register(i, nodes[i].Handle)
 	}
-	c := cluster{
+	applied := make([]map[int]any, n)
+	for i := range applied {
+		applied[i] = make(map[int]any)
+	}
+	c := &cluster{
+		t:         t,
 		net:       net,
 		nodes:     nodes,
 		connected: connected,
+		applied:   applied,
+		stop:      make(chan struct{}),
 	}
-	return &c
+	t.Cleanup(c.shutdown)
+	return c
 }
 
 func (c *cluster) checkOneLeader(t *testing.T) int {
@@ -82,6 +97,78 @@ func (c *cluster) reconnect(i int) {
 func (c *cluster) kill(i int) {
 	c.nodes[i].Kill()
 	c.net.Unregister(i)
+}
+
+func (c *cluster) drain(i int) {
+	defer c.wg.Done()
+	for {
+		select {
+		case msg := <-c.nodes[i].ApplyCh():
+			c.applyMu.Lock()
+			for j := range c.applied {
+				if old, ok := c.applied[j][msg.Index]; ok && old != msg.Command {
+					c.t.Errorf("index %d: node %d applied %v but node %d applied %v",
+						msg.Index, i, msg.Command, j, old)
+				}
+			}
+			c.applied[i][msg.Index] = msg.Command
+			c.applyMu.Unlock()
+		case <-c.stop:
+			return
+		}
+	}
+}
+
+// shutdown stops the drain goroutines and waits for them, so none can call
+// t.Errorf after the test has finished. Safe to call more than once.
+func (c *cluster) shutdown() {
+	c.stopOnce.Do(func() { close(c.stop) })
+	c.wg.Wait()
+}
+
+// nCommitted returns how many nodes applied the given index, and the command.
+func (c *cluster) nCommitted(index int) (int, any) {
+	c.applyMu.Lock()
+	defer c.applyMu.Unlock()
+	count := 0
+	var cmd any
+	for i := range c.applied {
+		if v, ok := c.applied[i][index]; ok {
+			cmd = v
+			count++
+		}
+	}
+	return count, cmd
+}
+
+// one submits cmd to a leader and waits until at least `expected` nodes applied it.
+func (c *cluster) one(t *testing.T, cmd any, expected int) int {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		index := -1
+		for i, n := range c.nodes {
+			if !c.connected[i] {
+				continue
+			}
+			if idx, _, ok := n.Submit(cmd); ok {
+				index = idx
+				break
+			}
+		}
+		if index != -1 {
+			end := time.Now().Add(2 * time.Second)
+			for time.Now().Before(end) {
+				if n, got := c.nCommitted(index); n >= expected && got == cmd {
+					return index
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("command %v was not committed by %d nodes", cmd, expected)
+	return -1
 }
 
 func TestElection3(t *testing.T) {
@@ -272,9 +359,10 @@ func TestCandidateWinsWithOneNodeDown(t *testing.T) {
 	t.Fatal("node 0 failed to be elected as leader")
 }
 
-// start launches every node's ticker.
 func (c *cluster) start() {
-	for _, n := range c.nodes {
+	for i, n := range c.nodes {
+		c.wg.Add(1)
+		go c.drain(i)
 		n.Start()
 	}
 }
@@ -415,6 +503,7 @@ func TestKillStopsGoroutines(t *testing.T) {
 	for _, n := range c.nodes {
 		n.Kill()
 	}
+	c.shutdown()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {

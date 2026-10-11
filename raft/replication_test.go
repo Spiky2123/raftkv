@@ -424,3 +424,15 @@ func TestApplierDoesNotHoldLockWhileSending(t *testing.T) {
 	<-r.ApplyCh() // drain so the applier can move on
 	r.Kill()
 }
+
+func TestAgree3(t *testing.T) {
+	c := makeCluster(t, 3)
+	c.start()
+	c.checkOneLeader(t)
+
+	for i, cmd := range []string{"a", "b", "c"} {
+		if idx := c.one(t, cmd, 3); idx != i+1 {
+			t.Fatalf("command %q landed at index %d, expected %d", cmd, idx, i+1)
+		}
+	}
+}

@@ -431,3 +431,139 @@ func TestAppendEntriesLowerLeaderCommitDoesNotLowerCommitIndex(t *testing.T) {
 		t.Fatalf("stale LeaderCommit moved commitIndex to %v, expected 2", r.commitIndex)
 	}
 }
+
+func TestVoteDeniedWhenCandidateLastTermLower(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	r.currentTerm = 3
+	r.log.Append(LogEntry{Term: 1})
+	r.log.Append(LogEntry{Term: 3})
+	r.mu.Unlock()
+
+	// the candidate's log is longer, but its last term is older
+	args := RequestVoteArgs{Term: 4, CandidateID: 1, LastLogIndex: 4, LastLogTerm: 1}
+	reply, ok := r.Handle("RequestVote", args).(RequestVoteReply)
+	if !ok {
+		t.Fatal("Handle did not return a RequestVoteReply value")
+	}
+	if reply.VoteGranted {
+		t.Fatal("granted a vote to a candidate whose last term is lower")
+	}
+	if reply.Term != 4 {
+		t.Fatalf("reply term is %v, expected 4 (higher term is still adopted)", reply.Term)
+	}
+}
+
+func TestVoteUpToDateRule(t *testing.T) {
+	// Voter's log is [1, 3] (last index 2, last term 3).
+	cases := []struct {
+		name         string
+		lastLogTerm  int
+		lastLogIndex int
+		wantGranted  bool
+	}{
+		{"same last term, shorter log", 3, 1, false},
+		{"same last term, same length", 3, 2, true},
+		{"same last term, longer log", 3, 5, true},
+		{"higher last term, shorter log", 4, 1, true},
+		{"lower last term, longer log", 1, 9, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newVoter()
+			r.mu.Lock()
+			r.currentTerm = 3
+			r.log.Append(LogEntry{Term: 1})
+			r.log.Append(LogEntry{Term: 3})
+			r.mu.Unlock()
+
+			args := RequestVoteArgs{
+				Term: 4, CandidateID: 1,
+				LastLogIndex: tc.lastLogIndex, LastLogTerm: tc.lastLogTerm,
+			}
+			reply, ok := r.Handle("RequestVote", args).(RequestVoteReply)
+			if !ok {
+				t.Fatal("Handle did not return a RequestVoteReply value")
+			}
+			if reply.VoteGranted != tc.wantGranted {
+				t.Fatalf("VoteGranted is %v, expected %v", reply.VoteGranted, tc.wantGranted)
+			}
+			if reply.Term != 4 {
+				t.Fatalf("reply term is %v, expected 4", reply.Term)
+			}
+		})
+	}
+}
+
+func TestDeniedVoteDoesNotResetElectionTimer(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	r.currentTerm = 3
+	r.log.Append(LogEntry{Term: 3})
+	past := time.Now().Add(-time.Second)
+	r.electionDeadline = past
+	r.mu.Unlock()
+
+	// higher term, but the candidate's log is stale, so the vote is denied
+	args := RequestVoteArgs{Term: 4, CandidateID: 1, LastLogIndex: 1, LastLogTerm: 1}
+	reply := r.Handle("RequestVote", args).(RequestVoteReply)
+	if reply.VoteGranted {
+		t.Fatal("expected the vote to be denied")
+	}
+
+	r.mu.Lock()
+	deadline := r.electionDeadline
+	r.mu.Unlock()
+	if !deadline.Equal(past) {
+		t.Fatal("a denied vote postponed my election timer")
+	}
+}
+
+func TestGrantedVoteResetsElectionTimer(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	past := time.Now().Add(-time.Second)
+	r.electionDeadline = past
+	r.mu.Unlock()
+
+	args := RequestVoteArgs{Term: 1, CandidateID: 1}
+	reply := r.Handle("RequestVote", args).(RequestVoteReply)
+	if !reply.VoteGranted {
+		t.Fatal("expected the vote to be granted")
+	}
+
+	r.mu.Lock()
+	deadline := r.electionDeadline
+	r.mu.Unlock()
+	if !deadline.After(time.Now()) {
+		t.Fatal("a granted vote did not reset the election timer")
+	}
+}
+
+func TestElectionWithNonEmptyLogs(t *testing.T) {
+	c := makeCluster(t, 3)
+	for _, n := range c.nodes {
+		n.mu.Lock()
+		n.log.Append(LogEntry{Term: 1})
+		n.log.Append(LogEntry{Term: 1})
+		n.mu.Unlock()
+	}
+	c.start()
+	c.checkOneLeader(t)
+}
+
+func TestStaleLogNodeCannotWin(t *testing.T) {
+	c := makeCluster(t, 3)
+	// nodes 0 and 1 hold a term-2 entry; node 2 does not
+	for _, i := range []int{0, 1} {
+		c.nodes[i].mu.Lock()
+		c.nodes[i].currentTerm = 2
+		c.nodes[i].log.Append(LogEntry{Term: 2})
+		c.nodes[i].mu.Unlock()
+	}
+	c.start()
+	leaderID := c.checkOneLeader(t)
+	if leaderID == 2 {
+		t.Fatal("a node with a stale log won the election")
+	}
+}

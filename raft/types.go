@@ -3,8 +3,10 @@ package raft
 import "encoding/gob"
 
 type RequestVoteArgs struct {
-	Term        int // The candidate's term
-	CandidateID int // ID of the node requesting the vote
+	Term         int // The candidate's term
+	CandidateID  int // ID of the node requesting the vote
+	LastLogIndex int
+	LastLogTerm  int
 }
 
 type RequestVoteReply struct {

@@ -74,7 +74,7 @@ func (r *Raft) Handle(method string, args any) any {
 			r.becomeFollowerLocked(request.Term)
 		}
 
-		if r.votedFor == noVote || r.votedFor == request.CandidateID {
+		if r.candidateUpToDateLocked(request.LastLogIndex, request.LastLogTerm) && (r.votedFor == noVote || r.votedFor == request.CandidateID) {
 			r.votedFor = request.CandidateID
 			r.resetElectionTimerLocked()
 
@@ -162,6 +162,16 @@ func (r *Raft) ApplyCh() <-chan ApplyMsg {
 	return r.applyCh
 }
 
+// caller must hold r.mu
+func (r *Raft) candidateUpToDateLocked(lastLogIndex, lastLogTerm int) bool {
+	if r.log.TermAt(r.log.LastIndex()) < lastLogTerm {
+		return true
+	} else if r.log.TermAt(r.log.LastIndex()) == lastLogTerm {
+		return r.log.LastIndex() <= lastLogIndex
+	}
+	return false
+}
+
 func (r *Raft) applier() {
 	for {
 		r.mu.Lock()
@@ -205,6 +215,9 @@ func (r *Raft) advanceCommitIndexLocked() {
 		}
 		cnt = 1
 		for _, j := range r.peers {
+			if j == r.id {
+				continue
+			}
 			if r.matchIndex[j] >= i {
 				cnt++
 			}
@@ -260,10 +273,13 @@ func (r *Raft) resetElectionTimerLocked() {
 
 // caller must hold r.mu
 func (r *Raft) becomeFollowerLocked(term int) {
+	wasLeader := r.state == leader
 	r.currentTerm = term
 	r.votedFor = noVote
 	r.state = follower
-	r.resetElectionTimerLocked()
+	if wasLeader {
+		r.resetElectionTimerLocked()
+	}
 }
 
 func (r *Raft) leaderLoop(term int) {
@@ -314,7 +330,12 @@ func (r *Raft) startElectionLocked() {
 	r.currentTerm++
 	r.state = candidate
 	r.votedFor = r.id
-	req := RequestVoteArgs{Term: r.currentTerm, CandidateID: r.id}
+	req := RequestVoteArgs{
+		Term:         r.currentTerm,
+		CandidateID:  r.id,
+		LastLogIndex: r.log.LastIndex(),
+		LastLogTerm:  r.log.TermAt(r.log.LastIndex()),
+	}
 	electionTerm := r.currentTerm
 	votes := 1
 	for _, v := range r.peers {

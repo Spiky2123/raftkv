@@ -30,6 +30,7 @@ type Raft struct {
 	matchIndex       []int
 	commitIndex      int
 	lastApplied      int
+	applyCh          chan ApplyMsg
 	transport        Transport
 	rng              *rand.Rand
 }
@@ -47,6 +48,7 @@ func New(id int, peers []int, transport Transport, rng *rand.Rand) *Raft {
 		matchIndex:  make([]int, len(peers)),
 		commitIndex: 0,
 		lastApplied: 0,
+		applyCh:     make(chan ApplyMsg),
 		transport:   transport,
 		rng:         rng,
 	}
@@ -147,12 +149,33 @@ func (r *Raft) Start() {
 	r.resetElectionTimerLocked()
 	r.mu.Unlock()
 	go r.ticker()
+	go r.applier()
 }
 
 func (r *Raft) Kill() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.dead = true
+}
+
+func (r *Raft) ApplyCh() <-chan ApplyMsg {
+	return r.applyCh
+}
+
+func (r *Raft) applier() {
+	for {
+		r.mu.Lock()
+		if r.dead {
+			r.mu.Unlock()
+			return
+		}
+		msgs := r.collectApplyLocked()
+		r.mu.Unlock()
+		for _, m := range msgs {
+			r.applyCh <- m
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // caller must hold r.mu

@@ -1,6 +1,9 @@
 package raft
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestSubmitOnFollower(t *testing.T) {
 	r := newVoter()
@@ -356,4 +359,68 @@ func TestCollectApplyMessages(t *testing.T) {
 	if len(msgs) != 1 || msgs[0].Index != 3 || msgs[0].Command != "c" {
 		t.Fatalf("expected [3:c], got %+v", msgs)
 	}
+}
+
+func TestApplierDeliversInOrder(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	r.log.Append(LogEntry{Term: 1, Command: "a"})
+	r.log.Append(LogEntry{Term: 1, Command: "b"})
+	r.log.Append(LogEntry{Term: 1, Command: "c"})
+	r.commitIndex = 2
+	r.mu.Unlock()
+
+	go r.applier()
+	defer r.Kill()
+
+	recv := func(wantIndex int, wantCmd string) {
+		select {
+		case msg := <-r.ApplyCh():
+			if msg.Index != wantIndex || msg.Command != wantCmd {
+				t.Fatalf("got %+v, expected index %d command %q", msg, wantIndex, wantCmd)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for index %d", wantIndex)
+		}
+	}
+
+	recv(1, "a")
+	recv(2, "b")
+
+	// entry 3 is not committed yet, so nothing more may arrive
+	select {
+	case msg := <-r.ApplyCh():
+		t.Fatalf("delivered an uncommitted entry: %+v", msg)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	r.mu.Lock()
+	r.commitIndex = 3
+	r.mu.Unlock()
+	recv(3, "c")
+}
+
+func TestApplierDoesNotHoldLockWhileSending(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	r.log.Append(LogEntry{Term: 1, Command: "a"})
+	r.commitIndex = 1
+	r.mu.Unlock()
+
+	go r.applier()
+	time.Sleep(50 * time.Millisecond) // applier collects entry 1 and blocks on the send; nobody reads
+
+	done := make(chan struct{})
+	go func() {
+		r.GetState()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("GetState blocked: the applier holds r.mu while sending")
+	}
+
+	<-r.ApplyCh() // drain so the applier can move on
+	r.Kill()
 }

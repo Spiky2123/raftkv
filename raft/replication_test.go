@@ -84,6 +84,7 @@ func TestBuildAppendEntries(t *testing.T) {
 
 	// peer is behind: nextIndex 2 means "send entries 2 and 3"
 	r.nextIndex[peer] = 2
+	r.commitIndex = 2
 	args := r.buildAppendEntriesLocked(peer)
 	if args.Term != 2 || args.LeaderID != r.id {
 		t.Fatalf("wrong term/leader in args: %+v", args)
@@ -93,6 +94,10 @@ func TestBuildAppendEntries(t *testing.T) {
 	}
 	if len(args.Entries) != 2 || args.Entries[0].Command != "b" {
 		t.Fatalf("expected entries [b c], got %+v", args.Entries)
+	}
+
+	if args.LeaderCommit != 2 {
+		t.Fatalf("expected LeaderCommit 2, got %v", args.LeaderCommit)
 	}
 
 	// peer is up to date: heartbeat, no entries
@@ -307,10 +312,10 @@ func TestAdvanceCommitIndexNeverDecreases(t *testing.T) {
 
 	r.currentTerm = 2
 	for i := 0; i < 3; i++ {
-		r.log.Append(LogEntry{Term: 1}) // entries from an older term
+		r.log.Append(LogEntry{Term: 1})
 	}
 	r.becomeLeaderLocked()
-	r.matchIndex[1] = 1 // a majority holds them
+	r.matchIndex[1] = 1
 	r.commitIndex = 3
 
 	r.advanceCommitIndexLocked()

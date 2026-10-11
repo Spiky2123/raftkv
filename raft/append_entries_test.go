@@ -339,3 +339,95 @@ func TestAppendEntriesSkipsMatchingThenAppends(t *testing.T) {
 		t.Fatalf("expected last index 4 after rpc, got %v", r.log.LastIndex())
 	}
 }
+
+func TestAppendEntriesCommitsOnlyConfirmedPrefix(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	r.currentTerm = 1
+	r.log.Append(LogEntry{Term: 1})
+	r.log.Append(LogEntry{Term: 1})
+	r.log.Append(LogEntry{Term: 1})
+	r.mu.Unlock()
+
+	args := AppendEntriesArgs{
+		Term: 1, LeaderID: 0,
+		PrevLogIndex: 1, PrevLogTerm: 1,
+		LeaderCommit: 3,
+	}
+	reply, ok := r.Handle("AppendEntries", args).(AppendEntriesReply)
+	if !ok || !reply.Success {
+		t.Fatalf("expected a successful reply, got %+v", reply)
+	}
+	if r.commitIndex != 1 {
+		t.Fatalf("commitIndex is %v, expected 1 (only index 1 was confirmed)", r.commitIndex)
+	}
+}
+
+func TestAppendEntriesCommitCappedByLeaderCommit(t *testing.T) {
+	r := newVoter()
+
+	args := AppendEntriesArgs{
+		Term: 1, LeaderID: 0,
+		PrevLogIndex: 0, PrevLogTerm: 0,
+		Entries:      []LogEntry{{Term: 1}, {Term: 1}, {Term: 1}},
+		LeaderCommit: 2,
+	}
+	r.Handle("AppendEntries", args)
+
+	if r.commitIndex != 2 {
+		t.Fatalf("commitIndex is %v, expected 2 (the leader's commit, not the log's end)", r.commitIndex)
+	}
+}
+
+func TestAppendEntriesFailedPrevCheckKeepsCommitIndex(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	r.currentTerm = 1
+	r.log.Append(LogEntry{Term: 1})
+	r.log.Append(LogEntry{Term: 1})
+	r.log.Append(LogEntry{Term: 1})
+	r.commitIndex = 1
+	r.mu.Unlock()
+
+	// My entry at index 2 has term 1, the leader claims term 2: the prev check must fail.
+	args := AppendEntriesArgs{
+		Term: 1, LeaderID: 0,
+		PrevLogIndex: 2, PrevLogTerm: 2,
+		LeaderCommit: 3,
+	}
+	reply, ok := r.Handle("AppendEntries", args).(AppendEntriesReply)
+	if !ok {
+		t.Fatal("Handle did not return an AppendEntriesReply value")
+	}
+	if reply.Success {
+		t.Fatal("expected Success=false for a term mismatch at PrevLogIndex 2")
+	}
+	if r.commitIndex != 1 {
+		t.Fatalf("failed prev check changed commitIndex to %v, expected 1", r.commitIndex)
+	}
+}
+
+func TestAppendEntriesLowerLeaderCommitDoesNotLowerCommitIndex(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	r.currentTerm = 1
+	r.log.Append(LogEntry{Term: 1})
+	r.log.Append(LogEntry{Term: 1})
+	r.log.Append(LogEntry{Term: 1})
+	r.commitIndex = 2
+	r.mu.Unlock()
+
+	// A delayed RPC: the prev check passes (confirmed through 3), but its LeaderCommit is stale.
+	args := AppendEntriesArgs{
+		Term: 1, LeaderID: 0,
+		PrevLogIndex: 3, PrevLogTerm: 1,
+		LeaderCommit: 1,
+	}
+	reply, ok := r.Handle("AppendEntries", args).(AppendEntriesReply)
+	if !ok || !reply.Success {
+		t.Fatalf("expected a successful reply, got %+v", reply)
+	}
+	if r.commitIndex != 2 {
+		t.Fatalf("stale LeaderCommit moved commitIndex to %v, expected 2", r.commitIndex)
+	}
+}

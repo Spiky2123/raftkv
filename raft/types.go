@@ -15,6 +15,7 @@ type RequestVoteReply struct {
 type AppendEntriesArgs struct {
 	Term         int // Leader's term
 	LeaderID     int // Leaders ID
+	LeaderCommit int
 	PrevLogTerm  int
 	PrevLogIndex int
 	Entries      []LogEntry

@@ -101,6 +101,10 @@ func (r *Raft) Handle(method string, args any) any {
 
 		if r.log.TermAt(appendArgs.PrevLogIndex) == appendArgs.PrevLogTerm {
 			reply.Success = true
+			if r.commitIndex < min(appendArgs.LeaderCommit, appendArgs.PrevLogIndex+len(appendArgs.Entries)) {
+				r.commitIndex = min(appendArgs.LeaderCommit, appendArgs.PrevLogIndex+len(appendArgs.Entries))
+			}
+
 			for k, entry := range appendArgs.Entries {
 				index := appendArgs.PrevLogIndex + 1 + k
 				if r.log.TermAt(index) == -1 {
@@ -175,6 +179,7 @@ func (r *Raft) buildAppendEntriesLocked(peer int) AppendEntriesArgs {
 	return AppendEntriesArgs{
 		Term:         r.currentTerm,
 		LeaderID:     r.id,
+		LeaderCommit: r.commitIndex,
 		PrevLogIndex: index,
 		PrevLogTerm:  r.log.TermAt(index),
 		Entries:      r.log.Slice(index + 1),

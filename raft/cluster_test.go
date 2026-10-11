@@ -174,7 +174,7 @@ func TestRequestVoteGrantsFreshFollower(t *testing.T) {
 }
 
 func newVoter() *Raft {
-	return New(1, []int{0, 1, 2}, nil, rand.New(rand.NewSource(1)))
+	return New(0, []int{0, 1, 2}, nil, rand.New(rand.NewSource(1)))
 }
 
 func requestVote(r *Raft, term, candidate int) RequestVoteReply {

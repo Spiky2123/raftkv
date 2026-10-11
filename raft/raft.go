@@ -148,6 +148,18 @@ func (r *Raft) Kill() {
 }
 
 // caller must hold r.mu
+func (r *Raft) buildAppendEntriesLocked(peer int) AppendEntriesArgs {
+	index := r.nextIndex[peer] - 1
+	return AppendEntriesArgs{
+		Term:         r.currentTerm,
+		LeaderID:     r.id,
+		PrevLogIndex: index,
+		PrevLogTerm:  r.log.TermAt(index),
+		Entries:      r.log.Slice(index + 1),
+	}
+}
+
+// caller must hold r.mu
 func (r *Raft) resetElectionTimerLocked() {
 	timeout := 150*time.Millisecond +
 		time.Duration(r.rng.Int63n(150))*time.Millisecond
@@ -173,12 +185,13 @@ func (r *Raft) leaderLoop(term int) {
 			r.mu.Unlock()
 			return
 		}
-		args := AppendEntriesArgs{Term: term, LeaderID: r.id}
+
 		for _, v := range r.peers {
 			if v == r.id {
 				continue
 			}
-			go func(peer int) {
+			args := r.buildAppendEntriesLocked(v)
+			go func(peer int, args AppendEntriesArgs) {
 				var reply AppendEntriesReply
 				if r.transport.Call(peer, "AppendEntries", args, &reply) {
 					r.mu.Lock()
@@ -187,7 +200,7 @@ func (r *Raft) leaderLoop(term int) {
 					}
 					r.mu.Unlock()
 				}
-			}(v)
+			}(v, args)
 		}
 		r.mu.Unlock()
 		time.Sleep(50 * time.Millisecond)

@@ -68,3 +68,44 @@ func TestBecomeLeaderInitializesIndexes(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildAppendEntries(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.currentTerm = 2
+	r.log.Append(LogEntry{Term: 1, Command: "a"})
+	r.log.Append(LogEntry{Term: 1, Command: "b"})
+	r.log.Append(LogEntry{Term: 2, Command: "c"})
+	r.becomeLeaderLocked()
+
+	peer := 1 // use any peer ID that isn't r.id; check what newVoter sets up
+
+	// peer is behind: nextIndex 2 means "send entries 2 and 3"
+	r.nextIndex[peer] = 2
+	args := r.buildAppendEntriesLocked(peer)
+	if args.Term != 2 || args.LeaderID != r.id {
+		t.Fatalf("wrong term/leader in args: %+v", args)
+	}
+	if args.PrevLogIndex != 1 || args.PrevLogTerm != 1 {
+		t.Fatalf("expected prev 1/1, got %v/%v", args.PrevLogIndex, args.PrevLogTerm)
+	}
+	if len(args.Entries) != 2 || args.Entries[0].Command != "b" {
+		t.Fatalf("expected entries [b c], got %+v", args.Entries)
+	}
+
+	// peer is up to date: heartbeat, no entries
+	r.nextIndex[peer] = r.log.LastIndex() + 1
+	args = r.buildAppendEntriesLocked(peer)
+	if args.PrevLogIndex != 3 || args.PrevLogTerm != 2 || len(args.Entries) != 0 {
+		t.Fatalf("expected empty heartbeat with prev 3/2, got %+v", args)
+	}
+
+	// peer has nothing: send everything, anchored at the sentinel
+	r.nextIndex[peer] = 1
+	args = r.buildAppendEntriesLocked(peer)
+	if args.PrevLogIndex != 0 || args.PrevLogTerm != 0 || len(args.Entries) != 3 {
+		t.Fatalf("expected prev 0/0 with 3 entries, got %+v", args)
+	}
+}

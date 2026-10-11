@@ -21,3 +21,23 @@ The main workflow for this project: write a test that only passes once the inten
 **Never hold the lock during an RPC** - If a node holds its lock while waiting for an RPC reply, it can't do anything else until the reply arrives. It can't answer RPCs from other nodes, serve `GetState`, or check its election deadline in the ticker. That makes the node look dead to its peers, which can trigger needless elections, and it can lead to deadlock.
 
 **Stale replies** - A reply can arrive late because of network delays, possibly after the election it belongs to has already ended. Such a reply is obsolete, so we drop it instead of counting it.
+
+## Week 3 Notes
+
+**Voting restriction** - A node only votes for a candidate whose log is at least as up to date as its own. This protects committed entries. An entry is committed once a majority holds it, and a candidate needs a majority of votes to win, so the two groups always share at least one node. That node refuses any candidate missing the entry, so every winner holds every committed entry. Without the rule, a candidate missing a committed entry could win, and its followers would delete that entry while resolving conflicts, even though the client was already told it succeeded.
+
+**Up to date** - Compare the last entries' terms first, and compare log lengths only if the terms are equal. A longer log with an older last term loses.
+
+**Leader appends before replicating** - The leader's log is the only source for what it replicates, so `Submit` appends locally first. This is safe because `Submit` promises nothing until the entry is committed. If the leader crashes first, the entry may vanish, and that's allowed because no client was told it succeeded.
+
+**Confirmed prefix** - A successful AppendEntries confirms only that the follower's log matches the leader's up to `PrevLogIndex + len(Entries)`. The leader sets `matchIndex` from that value, not from `LastIndex()`, because `Submit` can add entries while the RPC is in flight. The follower sets `commitIndex = min(LeaderCommit, PrevLogIndex + len(Entries))`, because it hasn't verified anything beyond that against this leader.
+
+**Truncate only on a real conflict** - A follower deletes entries only when an existing entry has a different term than the leader's entry at that index. A delayed, duplicated or heartbeat RPC knows less than the follower's log, and truncating on it could delete entries the leader already counted toward a majority. Entries that match are skipped, not treated as the end of the message.
+
+**Commit counts only current-term entries** - A leader never commits an entry from an older term just by counting replicas (Figure 8). I'll explain it fully in week 4.
+
+**Applier** - Committed entries are collected under the lock, then sent on the apply channel after unlocking, so a slow consumer can't freeze the node. Exactly one applier goroutine runs per node, which keeps order and delivers each entry once. Known gap: a blocked send can't be cancelled after `Kill()`, so week 4 adds a `done` channel with `select`.
+
+**Bugs I hit** - Truncating on every AppendEntries wiped the log on a heartbeat. Using `break` instead of `continue` in the entries loop skipped entries after a matching one. An `if / else if` treated heartbeat successes as failures. `nextIndex` started at zeros instead of `lastIndex + 1`. `Submit` ran without the lock. The election timer reset even when a vote was denied. The up-to-date check compared `currentTerm` instead of the last log terms. Each now has a test that guards it.
+
+**Churn tests** - `TestChurn5` (seed 1) converged with 152 entries applied out of 970 submitted. The ratio is low because most submissions hit non-leaders or isolated nodes and are dropped.

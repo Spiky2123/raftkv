@@ -26,6 +26,8 @@ type Raft struct {
 	votedFor         int
 	electionDeadline time.Time
 	peers            []int
+	nextIndex        []int
+	matchIndex       []int
 	transport        Transport
 	rng              *rand.Rand
 }
@@ -39,6 +41,8 @@ func New(id int, peers []int, transport Transport, rng *rand.Rand) *Raft {
 		log:         newLog(),
 		votedFor:    noVote,
 		peers:       peers,
+		nextIndex:   make([]int, len(peers)),
+		matchIndex:  make([]int, len(peers)),
 		transport:   transport,
 		rng:         rng,
 	}
@@ -115,6 +119,15 @@ func (r *Raft) Handle(method string, args any) any {
 	return nil
 }
 
+func (r *Raft) Submit(cmd any) (index, term int, isLeader bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.state == leader {
+		r.log.Append(LogEntry{Term: r.currentTerm, Command: cmd})
+	}
+	return r.log.LastIndex(), r.currentTerm, r.state == leader
+}
+
 func (r *Raft) GetState() (int, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -183,6 +196,16 @@ func (r *Raft) leaderLoop(term int) {
 }
 
 // caller must hold r.mu
+func (r *Raft) becomeLeaderLocked() {
+	r.state = leader
+	r.nextIndex = make([]int, len(r.peers))
+	for i := range r.nextIndex {
+		r.nextIndex[i] = r.log.LastIndex() + 1
+	}
+	r.matchIndex = make([]int, len(r.peers))
+}
+
+// caller must hold r.mu
 func (r *Raft) startElectionLocked() {
 	r.resetElectionTimerLocked()
 	r.currentTerm++
@@ -210,7 +233,7 @@ func (r *Raft) startElectionLocked() {
 				if reply.VoteGranted {
 					votes++
 					if votes >= len(r.peers)/2+1 {
-						r.state = leader
+						r.becomeLeaderLocked()
 						go r.leaderLoop(electionTerm)
 					}
 					return

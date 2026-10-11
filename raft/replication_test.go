@@ -215,3 +215,106 @@ func TestReplyDuplicateSuccessDoesNotBackOff(t *testing.T) {
 		t.Fatalf("heartbeat success moved nextIndex to %v, expected 4", r.nextIndex[peer])
 	}
 }
+
+func TestAdvanceCommitIndexMajority(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.currentTerm = 2
+	for i := 0; i < 4; i++ {
+		r.log.Append(LogEntry{Term: 2})
+	}
+	r.becomeLeaderLocked()
+	r.matchIndex[1] = 3
+	r.matchIndex[2] = 1
+
+	r.advanceCommitIndexLocked()
+
+	// leader has 4, peer 1 has 3, peer 2 has 1: majority (2 of 3) holds up to 3
+	if r.commitIndex != 3 {
+		t.Fatalf("commitIndex is %v, expected 3", r.commitIndex)
+	}
+}
+
+func TestAdvanceCommitIndexNeedsMajority(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.currentTerm = 2
+	r.log.Append(LogEntry{Term: 2})
+	r.becomeLeaderLocked() // no follower has anything
+
+	r.advanceCommitIndexLocked()
+
+	if r.commitIndex != 0 {
+		t.Fatalf("leader alone committed %v, expected 0", r.commitIndex)
+	}
+}
+
+func TestAdvanceCommitIndexOnlyCurrentTerm(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.currentTerm = 2
+	for i := 0; i < 3; i++ {
+		r.log.Append(LogEntry{Term: 1}) // entries from an older term
+	}
+	r.becomeLeaderLocked()
+	r.matchIndex[1] = 3 // a majority holds them
+
+	r.advanceCommitIndexLocked()
+	if r.commitIndex != 0 {
+		t.Fatalf("committed an old-term entry by counting: commitIndex %v, expected 0", r.commitIndex)
+	}
+
+	// once an entry from the current term reaches a majority, the older ones commit with it
+	r.log.Append(LogEntry{Term: 2})
+	r.matchIndex[1] = 4
+	r.advanceCommitIndexLocked()
+	if r.commitIndex != 4 {
+		t.Fatalf("commitIndex is %v, expected 4", r.commitIndex)
+	}
+}
+
+func TestReplySuccessAdvancesCommit(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.currentTerm = 2
+	for i := 0; i < 3; i++ {
+		r.log.Append(LogEntry{Term: 2})
+	}
+	r.becomeLeaderLocked()
+	peer := 1
+	r.nextIndex[peer] = 1
+	args := r.buildAppendEntriesLocked(peer) // prev 0, entries 1..3
+
+	r.handleAppendEntriesReplyLocked(peer, args, AppendEntriesReply{Term: 2, Success: true})
+
+	if r.commitIndex != 3 {
+		t.Fatalf("commitIndex is %v, expected 3 (leader + peer 1 is a majority of 3)", r.commitIndex)
+	}
+}
+
+func TestAdvanceCommitIndexNeverDecreases(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.currentTerm = 2
+	for i := 0; i < 3; i++ {
+		r.log.Append(LogEntry{Term: 1}) // entries from an older term
+	}
+	r.becomeLeaderLocked()
+	r.matchIndex[1] = 1 // a majority holds them
+	r.commitIndex = 3
+
+	r.advanceCommitIndexLocked()
+	if r.commitIndex != 3 {
+		t.Fatal("commit index decreased")
+	}
+}

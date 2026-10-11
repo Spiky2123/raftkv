@@ -28,6 +28,7 @@ type Raft struct {
 	peers            []int
 	nextIndex        []int
 	matchIndex       []int
+	commitIndex      int
 	transport        Transport
 	rng              *rand.Rand
 }
@@ -43,6 +44,7 @@ func New(id int, peers []int, transport Transport, rng *rand.Rand) *Raft {
 		peers:       peers,
 		nextIndex:   make([]int, len(peers)),
 		matchIndex:  make([]int, len(peers)),
+		commitIndex: 0,
 		transport:   transport,
 		rng:         rng,
 	}
@@ -148,6 +150,26 @@ func (r *Raft) Kill() {
 }
 
 // caller must hold r.mu
+func (r *Raft) advanceCommitIndexLocked() {
+	var cnt int
+	for i := r.log.LastIndex(); i > r.commitIndex; i-- {
+		if r.log.TermAt(i) < r.currentTerm {
+			return
+		}
+		cnt = 1
+		for _, j := range r.peers {
+			if r.matchIndex[j] >= i {
+				cnt++
+			}
+		}
+		if cnt >= len(r.peers)/2+1 {
+			r.commitIndex = i
+			return
+		}
+	}
+}
+
+// caller must hold r.mu
 func (r *Raft) buildAppendEntriesLocked(peer int) AppendEntriesArgs {
 	index := r.nextIndex[peer] - 1
 	return AppendEntriesArgs{
@@ -172,6 +194,7 @@ func (r *Raft) handleAppendEntriesReplyLocked(peer int, args AppendEntriesArgs, 
 		if r.matchIndex[peer] < args.PrevLogIndex+len(args.Entries) {
 			r.matchIndex[peer] = args.PrevLogIndex + len(args.Entries)
 			r.nextIndex[peer] = args.PrevLogIndex + len(args.Entries) + 1
+			r.advanceCommitIndexLocked()
 		}
 	} else {
 		if r.nextIndex[peer] > args.PrevLogIndex {

@@ -109,3 +109,109 @@ func TestBuildAppendEntries(t *testing.T) {
 		t.Fatalf("expected prev 0/0 with 3 entries, got %+v", args)
 	}
 }
+
+func TestReplySuccessUsesSentEntries(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.currentTerm = 2
+	r.log.Append(LogEntry{Term: 1})
+	r.log.Append(LogEntry{Term: 2})
+	r.log.Append(LogEntry{Term: 2})
+	r.becomeLeaderLocked()
+
+	peer := 1
+	r.nextIndex[peer] = 2
+	args := r.buildAppendEntriesLocked(peer) // prev 1, entries for indices 2 and 3
+
+	// two Submits happen while the RPC is in flight
+	r.log.Append(LogEntry{Term: 2})
+	r.log.Append(LogEntry{Term: 2})
+
+	r.handleAppendEntriesReplyLocked(peer, args, AppendEntriesReply{Term: 2, Success: true})
+
+	if r.matchIndex[peer] != 3 {
+		t.Fatalf("matchIndex is %v, expected 3 (what was sent)", r.matchIndex[peer])
+	}
+	if r.nextIndex[peer] != 4 {
+		t.Fatalf("nextIndex is %v, expected 4", r.nextIndex[peer])
+	}
+}
+
+func TestReplyFailureDuplicateIsIdempotent(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.currentTerm = 2
+	for i := 0; i < 5; i++ {
+		r.log.Append(LogEntry{Term: 2})
+	}
+	r.becomeLeaderLocked()
+	peer := 1
+	r.nextIndex[peer] = 5
+	args := r.buildAppendEntriesLocked(peer) // prev 4
+
+	fail := AppendEntriesReply{Term: 2, Success: false}
+	r.handleAppendEntriesReplyLocked(peer, args, fail)
+	r.handleAppendEntriesReplyLocked(peer, args, fail) // same reply delivered twice
+
+	if r.nextIndex[peer] != 4 {
+		t.Fatalf("nextIndex is %v, expected 4", r.nextIndex[peer])
+	}
+
+	// an old failure must not move nextIndex forward
+	r.nextIndex[peer] = 2
+	r.handleAppendEntriesReplyLocked(peer, args, fail)
+	if r.nextIndex[peer] != 2 {
+		t.Fatalf("stale failure moved nextIndex to %v, expected 2", r.nextIndex[peer])
+	}
+}
+
+func TestReplyFailureFloorIsOne(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.currentTerm = 2
+	r.becomeLeaderLocked()
+	peer := 1
+	r.nextIndex[peer] = 1
+	args := r.buildAppendEntriesLocked(peer) // prev 0
+
+	r.handleAppendEntriesReplyLocked(peer, args, AppendEntriesReply{Term: 2, Success: false})
+	if r.nextIndex[peer] != 1 {
+		t.Fatalf("nextIndex is %v, expected 1", r.nextIndex[peer])
+	}
+}
+
+func TestReplyDuplicateSuccessDoesNotBackOff(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.currentTerm = 2
+	for i := 0; i < 3; i++ {
+		r.log.Append(LogEntry{Term: 2})
+	}
+	r.becomeLeaderLocked()
+	peer := 1
+	r.nextIndex[peer] = 2
+	args := r.buildAppendEntriesLocked(peer) // prev 1, entries for 2 and 3
+
+	ok := AppendEntriesReply{Term: 2, Success: true}
+	r.handleAppendEntriesReplyLocked(peer, args, ok)
+	r.handleAppendEntriesReplyLocked(peer, args, ok) // duplicate delivery
+
+	if r.matchIndex[peer] != 3 || r.nextIndex[peer] != 4 {
+		t.Fatalf("after duplicate: matchIndex %v nextIndex %v, expected 3 and 4",
+			r.matchIndex[peer], r.nextIndex[peer])
+	}
+
+	hb := r.buildAppendEntriesLocked(peer) // prev 3, no entries
+	r.handleAppendEntriesReplyLocked(peer, hb, ok)
+	if r.nextIndex[peer] != 4 {
+		t.Fatalf("heartbeat success moved nextIndex to %v, expected 4", r.nextIndex[peer])
+	}
+}

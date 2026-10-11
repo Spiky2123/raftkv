@@ -160,6 +160,27 @@ func (r *Raft) buildAppendEntriesLocked(peer int) AppendEntriesArgs {
 }
 
 // caller must hold r.mu
+func (r *Raft) handleAppendEntriesReplyLocked(peer int, args AppendEntriesArgs, reply AppendEntriesReply) {
+	if reply.Term > r.currentTerm {
+		r.becomeFollowerLocked(reply.Term)
+		return
+	}
+	if r.state != leader || r.currentTerm != args.Term {
+		return
+	}
+	if reply.Success {
+		if r.matchIndex[peer] < args.PrevLogIndex+len(args.Entries) {
+			r.matchIndex[peer] = args.PrevLogIndex + len(args.Entries)
+			r.nextIndex[peer] = args.PrevLogIndex + len(args.Entries) + 1
+		}
+	} else {
+		if r.nextIndex[peer] > args.PrevLogIndex {
+			r.nextIndex[peer] = max(1, args.PrevLogIndex)
+		}
+	}
+}
+
+// caller must hold r.mu
 func (r *Raft) resetElectionTimerLocked() {
 	timeout := 150*time.Millisecond +
 		time.Duration(r.rng.Int63n(150))*time.Millisecond
@@ -195,9 +216,7 @@ func (r *Raft) leaderLoop(term int) {
 				var reply AppendEntriesReply
 				if r.transport.Call(peer, "AppendEntries", args, &reply) {
 					r.mu.Lock()
-					if reply.Term > r.currentTerm {
-						r.becomeFollowerLocked(reply.Term)
-					}
+					r.handleAppendEntriesReplyLocked(peer, args, reply)
 					r.mu.Unlock()
 				}
 			}(v, args)

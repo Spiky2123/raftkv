@@ -122,6 +122,9 @@ func (c *cluster) drain(i int) {
 // shutdown stops the drain goroutines and waits for them, so none can call
 // t.Errorf after the test has finished. Safe to call more than once.
 func (c *cluster) shutdown() {
+	for _, n := range c.nodes {
+		n.Kill()
+	}
 	c.stopOnce.Do(func() { close(c.stop) })
 	c.wg.Wait()
 }

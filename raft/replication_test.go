@@ -589,3 +589,26 @@ func runChurn(t *testing.T, seed int64, dropRate float64) {
 	}
 	t.Logf("converged: %d entries applied, %d commands submitted", last, nextCmd)
 }
+
+func TestApplierExitsWhenKilledWhileBlockedOnSend(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	r.log.Append(LogEntry{Term: 1, Command: "a"})
+	r.commitIndex = 1
+	r.mu.Unlock()
+
+	exited := make(chan struct{})
+	go func() {
+		r.applier()
+		close(exited)
+	}()
+	time.Sleep(50 * time.Millisecond) // applier is now blocked sending; nobody reads
+
+	r.Kill()
+
+	select {
+	case <-exited:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("applier is still blocked on the send after Kill")
+	}
+}

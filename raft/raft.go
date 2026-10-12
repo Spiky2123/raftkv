@@ -31,6 +31,7 @@ type Raft struct {
 	commitIndex      int
 	lastApplied      int
 	applyCh          chan ApplyMsg
+	done             chan struct{}
 	transport        Transport
 	rng              *rand.Rand
 }
@@ -49,6 +50,7 @@ func New(id int, peers []int, transport Transport, rng *rand.Rand) *Raft {
 		commitIndex: 0,
 		lastApplied: 0,
 		applyCh:     make(chan ApplyMsg),
+		done:        make(chan struct{}),
 		transport:   transport,
 		rng:         rng,
 	}
@@ -155,6 +157,9 @@ func (r *Raft) Start() {
 func (r *Raft) Kill() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if !r.dead {
+		close(r.done)
+	}
 	r.dead = true
 }
 
@@ -182,7 +187,11 @@ func (r *Raft) applier() {
 		msgs := r.collectApplyLocked()
 		r.mu.Unlock()
 		for _, m := range msgs {
-			r.applyCh <- m
+			select {
+			case r.applyCh <- m:
+			case <-r.done:
+				return
+			}
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

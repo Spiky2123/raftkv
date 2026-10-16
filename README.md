@@ -3,6 +3,7 @@
 ![Language](https://img.shields.io/badge/language-Go-00ADD8?style=flat-square)
 ![Status](https://img.shields.io/badge/status-work%20in%20progress%20(week%204%20of%208)-yellow?style=flat-square)
 ![Dependencies](https://img.shields.io/badge/dependencies-standard%20library%20only-brightgreen?style=flat-square)
+[![CI](https://github.com/Spiky2123/raftkv/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Spiky2123/raftkv/actions/workflows/ci.yml)
 
 raftkv is my implementation of the Raft consensus algorithm in Go, built from the original paper, together with a simulated unreliable network to test it on. The end goal is a linearizable key-value service replicated across a cluster that keeps working while nodes crash, messages are lost, and the network partitions.
 

@@ -34,7 +34,7 @@ The main workflow for this project: write a test that only passes once the inten
 
 **Truncate only on a real conflict** - A follower deletes entries only when an existing entry has a different term than the leader's entry at that index. A delayed, duplicated or heartbeat RPC knows less than the follower's log, and truncating on it could delete entries the leader already counted toward a majority. Entries that match are skipped, not treated as the end of the message.
 
-**Commit counts only current-term entries** - A leader never commits an entry from an older term just by counting replicas (Figure 8). I'll explain it fully in week 4.
+**Commit counts only current-term entries** - A leader never commits an entry from an older term just by counting replicas (Figure 8). This ensures the code upholds its promise of a committed entry will never be lost because otherwise, the entry that was committed could be erased by a new leader that doesn't hold it. Once a current-term entry on top of it reaches a majority, the up-to-date voting rule forces every future leader to hold that entry, and therefore everything before it, including the old entry, so the old entry can no longer be overwritten and is committed indirectly.
 
 **Applier** - Committed entries are collected under the lock, then sent on the apply channel after unlocking, so a slow consumer can't freeze the node. Exactly one applier goroutine runs per node, which keeps order and delivers each entry once. Known gap: a blocked send can't be cancelled after `Kill()`, so week 4 adds a `done` channel with `select`.
 

@@ -3,6 +3,7 @@ package raft
 import (
 	"math/rand"
 	"raftkv/labnet"
+	"raftkv/storage"
 	"runtime"
 	"sync"
 	"testing"
@@ -33,7 +34,7 @@ func makeCluster(t *testing.T, n int) *cluster {
 	for i := 0; i < n; i++ {
 		rng := rand.New(rand.NewSource(int64(i)))
 		end := net.Endpoint(i)
-		nodes[i] = New(i, peers, end, rng)
+		nodes[i] = New(i, peers, end, storage.NewMemory(), rng)
 		net.Register(i, nodes[i].Handle)
 	}
 	applied := make([]map[int]any, n)
@@ -241,7 +242,7 @@ func TestStartElection(t *testing.T) {
 
 func TestRequestVoteGrantsFreshFollower(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
-	voter := New(1, []int{0, 1, 2}, nil, rng)
+	voter := New(1, []int{0, 1, 2}, nil, storage.NewMemory(), rng)
 
 	args := RequestVoteArgs{Term: 1, CandidateID: 0}
 	reply := voter.Handle("RequestVote", args).(RequestVoteReply)
@@ -264,7 +265,7 @@ func TestRequestVoteGrantsFreshFollower(t *testing.T) {
 }
 
 func newVoter() *Raft {
-	return New(0, []int{0, 1, 2}, nil, rand.New(rand.NewSource(1)))
+	return New(0, []int{0, 1, 2}, nil, storage.NewMemory(), rand.New(rand.NewSource(1)))
 }
 
 func requestVote(r *Raft, term, candidate int) RequestVoteReply {
@@ -426,7 +427,7 @@ func (f fakeTransport) Call(to int, method string, args, reply any) bool {
 }
 
 func TestLeaderStepDownResetsTimer(t *testing.T) {
-	r := New(0, []int{0, 1, 2}, fakeTransport{replyTerm: 9}, rand.New(rand.NewSource(1)))
+	r := New(0, []int{0, 1, 2}, fakeTransport{replyTerm: 9}, storage.NewMemory(), rand.New(rand.NewSource(1)))
 	r.mu.Lock()
 	r.state, r.currentTerm = leader, 1
 	r.electionDeadline = time.Now().Add(-time.Hour)

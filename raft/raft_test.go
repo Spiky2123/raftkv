@@ -2,13 +2,14 @@ package raft
 
 import (
 	"math/rand"
+	"raftkv/storage"
 	"testing"
 )
 
 func TestInitialState(t *testing.T) {
 	peers := []int{0, 1, 2}
 	rng := rand.New(rand.NewSource(1))
-	node := New(0, peers, nil, rng)
+	node := New(0, peers, nil, storage.NewMemory(), rng)
 
 	term, isLeader := node.GetState()
 

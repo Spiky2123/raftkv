@@ -33,10 +33,11 @@ type Raft struct {
 	applyCh          chan ApplyMsg
 	done             chan struct{}
 	transport        Transport
+	storage          Storage
 	rng              *rand.Rand
 }
 
-func New(id int, peers []int, transport Transport, rng *rand.Rand) *Raft {
+func New(id int, peers []int, transport Transport, storage Storage, rng *rand.Rand) *Raft {
 	raft := Raft{
 		id:          id,
 		state:       follower,
@@ -52,8 +53,10 @@ func New(id int, peers []int, transport Transport, rng *rand.Rand) *Raft {
 		applyCh:     make(chan ApplyMsg),
 		done:        make(chan struct{}),
 		transport:   transport,
+		storage:     storage,
 		rng:         rng,
 	}
+	raft.readPersist()
 	return &raft
 }
 

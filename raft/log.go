@@ -1,5 +1,7 @@
 package raft
 
+import "encoding/gob"
+
 type LogEntry struct {
 	Term    int
 	Command any
@@ -40,6 +42,22 @@ func (l *Log) Slice(from int) []LogEntry {
 	s = make([]LogEntry, len(l.entries)-from)
 	copy(s, l.entries[from:])
 	return s
+}
+
+func (l *Log) encode(encoder *gob.Encoder) error {
+	err := encoder.Encode(l.entries)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (l *Log) decode(decoder *gob.Decoder) error {
+	err := decoder.Decode(&l.entries)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func newLog() *Log {

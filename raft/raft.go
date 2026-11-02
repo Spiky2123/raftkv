@@ -82,7 +82,7 @@ func (r *Raft) Handle(method string, args any) any {
 		if r.candidateUpToDateLocked(request.LastLogIndex, request.LastLogTerm) && (r.votedFor == noVote || r.votedFor == request.CandidateID) {
 			r.votedFor = request.CandidateID
 			r.resetElectionTimerLocked()
-
+			r.persist()
 			reply.VoteGranted = true
 		}
 		reply.Term = r.currentTerm
@@ -114,18 +114,24 @@ func (r *Raft) Handle(method string, args any) any {
 				r.commitIndex = min(appendArgs.LeaderCommit, appendArgs.PrevLogIndex+len(appendArgs.Entries))
 			}
 
+			changed := false
 			for k, entry := range appendArgs.Entries {
 				index := appendArgs.PrevLogIndex + 1 + k
 				if r.log.TermAt(index) == -1 {
 					r.log.Append(entry)
+					changed = true
 				} else {
 					if r.log.TermAt(index) != entry.Term {
 						r.log.TruncateFrom(index)
 						r.log.Append(entry)
+						changed = true
 					} else {
 						continue
 					}
 				}
+			}
+			if changed {
+				r.persist()
 			}
 		}
 
@@ -139,6 +145,7 @@ func (r *Raft) Submit(cmd any) (index, term int, isLeader bool) {
 	defer r.mu.Unlock()
 	if r.state == leader {
 		r.log.Append(LogEntry{Term: r.currentTerm, Command: cmd})
+		r.persist()
 	}
 	return r.log.LastIndex(), r.currentTerm, r.state == leader
 }
@@ -292,6 +299,7 @@ func (r *Raft) becomeFollowerLocked(term int) {
 	if wasLeader {
 		r.resetElectionTimerLocked()
 	}
+	r.persist()
 }
 
 func (r *Raft) leaderLoop(term int) {
@@ -342,6 +350,7 @@ func (r *Raft) startElectionLocked() {
 	r.currentTerm++
 	r.state = candidate
 	r.votedFor = r.id
+	r.persist()
 	req := RequestVoteArgs{
 		Term:         r.currentTerm,
 		CandidateID:  r.id,

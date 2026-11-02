@@ -45,3 +45,18 @@ func TestPersistAndRestore(t *testing.T) {
 		t.Fatalf("command at index 2 = %v, want 20", got)
 	}
 }
+
+func TestPersistsOnVote(t *testing.T) {
+	mem := storage.NewMemory()
+	v := New(1, []int{0, 1, 2}, nil, mem, rand.New(rand.NewSource(1)))
+	v.Handle("RequestVote", RequestVoteArgs{Term: 1, CandidateID: 0})
+	restored := New(1, []int{0, 1, 2}, nil, mem, rand.New(rand.NewSource(1)))
+
+	if restored.votedFor != 0 {
+		t.Fatalf("expected to persist vote for 0, voted for %d instead", restored.votedFor)
+	}
+
+	if restored.currentTerm != 1 {
+		t.Fatalf("expected to persist current term 1, current term is %d instead", restored.votedFor)
+	}
+}

@@ -14,6 +14,8 @@ type cluster struct {
 	t         *testing.T
 	net       *labnet.Network
 	nodes     []*Raft
+	stores    []*storage.Memory
+	peers     []int
 	connected []bool
 	applyMu   sync.Mutex
 	applied   []map[int]any // per node: log index -> command
@@ -25,6 +27,7 @@ type cluster struct {
 func makeCluster(t *testing.T, n int) *cluster {
 	net := labnet.NewNetwork(1)
 	nodes := make([]*Raft, n)
+	stores := make([]*storage.Memory, n)
 	peers := make([]int, n)
 	connected := make([]bool, n)
 	for i := 0; i < n; i++ {
@@ -34,7 +37,8 @@ func makeCluster(t *testing.T, n int) *cluster {
 	for i := 0; i < n; i++ {
 		rng := rand.New(rand.NewSource(int64(i)))
 		end := net.Endpoint(i)
-		nodes[i] = New(i, peers, end, storage.NewMemory(), rng)
+		stores[i] = storage.NewMemory()
+		nodes[i] = New(i, peers, end, stores[i], rng)
 		net.Register(i, nodes[i].Handle)
 	}
 	applied := make([]map[int]any, n)
@@ -45,6 +49,8 @@ func makeCluster(t *testing.T, n int) *cluster {
 		t:         t,
 		net:       net,
 		nodes:     nodes,
+		stores:    stores,
+		peers:     peers,
 		connected: connected,
 		applied:   applied,
 		stop:      make(chan struct{}),
@@ -100,11 +106,27 @@ func (c *cluster) kill(i int) {
 	c.net.Unregister(i)
 }
 
-func (c *cluster) drain(i int) {
+func (c *cluster) crash(i int) {
+	c.nodes[i].Kill()
+	c.net.Unregister(i)
+	c.connected[i] = false
+}
+
+func (c *cluster) restart(i int) {
+	c.nodes[i] = New(i, c.peers, c.net.Endpoint(i), c.stores[i], rand.New(rand.NewSource(int64(i))))
+	c.net.Register(i, c.nodes[i].Handle)
+	c.connected[i] = true
+	c.wg.Add(1)
+	go c.drain(i, c.nodes[i])
+	c.nodes[i].Start()
+}
+
+func (c *cluster) drain(i int, node *Raft) {
 	defer c.wg.Done()
+	ch := node.ApplyCh()
 	for {
 		select {
-		case msg := <-c.nodes[i].ApplyCh():
+		case msg := <-ch:
 			c.applyMu.Lock()
 			for j := range c.applied {
 				if old, ok := c.applied[j][msg.Index]; ok && old != msg.Command {
@@ -366,7 +388,7 @@ func TestCandidateWinsWithOneNodeDown(t *testing.T) {
 func (c *cluster) start() {
 	for i, n := range c.nodes {
 		c.wg.Add(1)
-		go c.drain(i)
+		go c.drain(i, n)
 		n.Start()
 	}
 }
@@ -528,5 +550,23 @@ func TestKilledNodeStaysDead(t *testing.T) {
 	term, votedFor, _ := peek(r)
 	if reply.VoteGranted || term == 5 || votedFor != noVote {
 		t.Fatalf("killed node reacted: reply=%+v term=%d votedFor=%d", reply, term, votedFor)
+	}
+}
+
+func TestRestartRestoresState(t *testing.T) {
+	c := makeCluster(t, 3)
+	c.start()
+	c.checkOneLeader(t)
+	c.one(t, 100, 3)
+	c.one(t, 200, 3)
+	c.crash(2)
+	c.restart(2)
+
+	c.nodes[2].mu.Lock()
+	got := c.nodes[2].log.LastIndex()
+	c.nodes[2].mu.Unlock()
+
+	if got < 2 {
+		t.Fatalf("expected nodes storage to persist, got last index lower than commited entries instead")
 	}
 }

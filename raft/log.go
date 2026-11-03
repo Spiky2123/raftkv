@@ -22,6 +22,24 @@ func (l *Log) TermAt(index int) int {
 	return l.entries[index].Term
 }
 
+func (l *Log) firstIndexOfTerm(term int) int {
+	for i, v := range l.entries {
+		if v.Term == term {
+			return i
+		}
+	}
+	return -1
+}
+
+func (l *Log) lastIndexOfTerm(term int) int {
+	for i := len(l.entries) - 1; i >= 1; i-- {
+		if l.entries[i].Term == term {
+			return i
+		}
+	}
+	return -1
+}
+
 func (l *Log) Append(entry LogEntry) int {
 	l.entries = append(l.entries, entry)
 	return len(l.entries) - 1

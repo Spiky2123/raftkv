@@ -133,6 +133,14 @@ func (r *Raft) Handle(method string, args any) any {
 			if changed {
 				r.persist()
 			}
+		} else {
+			if appendArgs.PrevLogIndex > r.log.LastIndex() {
+				reply.ConflictTerm = -1
+				reply.ConflictIndex = r.log.LastIndex() + 1
+			} else {
+				reply.ConflictTerm = r.log.TermAt(appendArgs.PrevLogIndex)
+				reply.ConflictIndex = r.log.firstIndexOfTerm(reply.ConflictTerm)
+			}
 		}
 
 		return reply
@@ -277,8 +285,19 @@ func (r *Raft) handleAppendEntriesReplyLocked(peer int, args AppendEntriesArgs, 
 			r.advanceCommitIndexLocked()
 		}
 	} else {
-		if r.nextIndex[peer] > args.PrevLogIndex {
-			r.nextIndex[peer] = max(1, args.PrevLogIndex)
+		var ni int
+		if reply.ConflictTerm == -1 {
+			ni = reply.ConflictIndex
+		} else if last := r.log.lastIndexOfTerm(reply.ConflictTerm); last >= 0 {
+			ni = last + 1
+		} else {
+			ni = reply.ConflictIndex
+		}
+		if ni < 1 {
+			ni = 1
+		}
+		if ni < r.nextIndex[peer] {
+			r.nextIndex[peer] = ni
 		}
 	}
 }

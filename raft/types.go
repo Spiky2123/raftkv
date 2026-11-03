@@ -24,8 +24,10 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term    int // Current term so a stale leader learns it's behind
-	Success bool
+	Term          int // Current term so a stale leader learns it's behind
+	Success       bool
+	ConflictTerm  int
+	ConflictIndex int
 }
 
 type ApplyMsg struct {

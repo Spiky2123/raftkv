@@ -567,3 +567,101 @@ func TestStaleLogNodeCannotWin(t *testing.T) {
 		t.Fatal("a node with a stale log won the election")
 	}
 }
+
+func TestAppendEntriesReportsConflict(t *testing.T) {
+	t.Run("term mismatch at PrevLogIndex", func(t *testing.T) {
+		// follower log terms: [sentinel(0), 1, 1, 2, 2]  (indices 0..4)
+		r := newVoter()
+		r.mu.Lock()
+		r.currentTerm = 2
+		r.log.Append(LogEntry{Term: 1})
+		r.log.Append(LogEntry{Term: 1})
+		r.log.Append(LogEntry{Term: 2})
+		r.log.Append(LogEntry{Term: 2})
+		r.mu.Unlock()
+
+		args := AppendEntriesArgs{
+			Term: 2, LeaderID: 1,
+			PrevLogIndex: 4, PrevLogTerm: 3,
+		}
+		reply := r.Handle("AppendEntries", args).(AppendEntriesReply)
+
+		if reply.Success {
+			t.Fatal("expected Success=false for a term mismatch at PrevLogIndex 4")
+		}
+		if reply.ConflictTerm != 2 {
+			t.Fatalf("ConflictTerm = %d, want 2 (the follower's term at index 4)", reply.ConflictTerm)
+		}
+		if reply.ConflictIndex != 3 {
+			t.Fatalf("ConflictIndex = %d, want 3 (first index of term 2)", reply.ConflictIndex)
+		}
+	})
+
+	t.Run("follower log too short", func(t *testing.T) {
+		// empty follower log: just the sentinel, LastIndex == 0
+		r := newVoter()
+		r.mu.Lock()
+		r.currentTerm = 2
+		r.mu.Unlock()
+
+		args := AppendEntriesArgs{
+			Term: 2, LeaderID: 1,
+			PrevLogIndex: 5, PrevLogTerm: 1,
+		}
+		reply := r.Handle("AppendEntries", args).(AppendEntriesReply)
+
+		if reply.Success {
+			t.Fatal("expected Success=false when the follower log is too short")
+		}
+		if reply.ConflictTerm != -1 {
+			t.Fatalf("ConflictTerm = %d, want -1 (no conflicting term, just short)", reply.ConflictTerm)
+		}
+		if reply.ConflictIndex != 1 {
+			t.Fatalf("ConflictIndex = %d, want 1 (LastIndex 0 + 1)", reply.ConflictIndex)
+		}
+	})
+}
+
+func TestFastBackupSkipsConflictingTerm(t *testing.T) {
+	t.Run("leader lacks the conflicting term", func(t *testing.T) {
+		r := newVoter()
+		r.mu.Lock()
+		r.state = leader
+		r.currentTerm = 4
+		r.log.Append(LogEntry{Term: 1})
+		r.log.Append(LogEntry{Term: 1})
+		r.log.Append(LogEntry{Term: 2})
+		r.nextIndex[1] = 4
+
+		args := AppendEntriesArgs{Term: 4, PrevLogIndex: 3, PrevLogTerm: 2}
+		reply := AppendEntriesReply{Term: 4, Success: false, ConflictTerm: 5, ConflictIndex: 2}
+		r.handleAppendEntriesReplyLocked(1, args, reply)
+		got := r.nextIndex[1]
+		r.mu.Unlock()
+
+		if got != 2 {
+			t.Fatalf("nextIndex[1] = %d, want 2 (jump straight to ConflictIndex)", got)
+		}
+	})
+
+	t.Run("leader has the conflicting term", func(t *testing.T) {
+		r := newVoter()
+		r.mu.Lock()
+		r.state = leader
+		r.currentTerm = 4
+		r.log.Append(LogEntry{Term: 1})
+		r.log.Append(LogEntry{Term: 1})
+		r.log.Append(LogEntry{Term: 2})
+		r.nextIndex[1] = 4
+
+		args := AppendEntriesArgs{Term: 4, PrevLogIndex: 3, PrevLogTerm: 2}
+		reply := AppendEntriesReply{Term: 4, Success: false, ConflictTerm: 1, ConflictIndex: 1}
+		r.handleAppendEntriesReplyLocked(1, args, reply)
+		got := r.nextIndex[1]
+		r.mu.Unlock()
+
+		if got != 3 {
+			t.Fatalf("nextIndex[1] = %d, want 3 (one past the leader's last term-1 entry)", got)
+		}
+	})
+}

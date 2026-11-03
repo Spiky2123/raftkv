@@ -155,23 +155,28 @@ func TestReplyFailureDuplicateIsIdempotent(t *testing.T) {
 	defer r.mu.Unlock()
 
 	r.currentTerm = 2
-	for i := 0; i < 5; i++ {
-		r.log.Append(LogEntry{Term: 2})
-	}
+	r.log.Append(LogEntry{Term: 1})
+	r.log.Append(LogEntry{Term: 1})
+	r.log.Append(LogEntry{Term: 2})
+	r.log.Append(LogEntry{Term: 2})
+	r.log.Append(LogEntry{Term: 2})
 	r.becomeLeaderLocked()
 	peer := 1
-	r.nextIndex[peer] = 5
-	args := r.buildAppendEntriesLocked(peer) // prev 4
+	r.nextIndex[peer] = 6
+	args := r.buildAppendEntriesLocked(peer)
 
-	fail := AppendEntriesReply{Term: 2, Success: false}
+	fail := AppendEntriesReply{Term: 2, Success: false, ConflictTerm: 3, ConflictIndex: 3}
+
 	r.handleAppendEntriesReplyLocked(peer, args, fail)
-	r.handleAppendEntriesReplyLocked(peer, args, fail) // same reply delivered twice
-
-	if r.nextIndex[peer] != 4 {
-		t.Fatalf("nextIndex is %v, expected 4", r.nextIndex[peer])
+	if r.nextIndex[peer] != 3 {
+		t.Fatalf("nextIndex is %v, expected 3 (jumped to ConflictIndex)", r.nextIndex[peer])
 	}
 
-	// an old failure must not move nextIndex forward
+	r.handleAppendEntriesReplyLocked(peer, args, fail)
+	if r.nextIndex[peer] != 3 {
+		t.Fatalf("duplicate failure moved nextIndex to %v, expected it to stay 3", r.nextIndex[peer])
+	}
+
 	r.nextIndex[peer] = 2
 	r.handleAppendEntriesReplyLocked(peer, args, fail)
 	if r.nextIndex[peer] != 2 {

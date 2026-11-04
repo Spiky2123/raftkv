@@ -617,3 +617,27 @@ func TestApplierExitsWhenKilledWhileBlockedOnSend(t *testing.T) {
 		t.Fatal("applier is still blocked on the send after Kill")
 	}
 }
+
+func TestFigure8OldTermNotCommittedByCount(t *testing.T) {
+	r := newVoter()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.currentTerm = 6
+	r.state = leader
+	r.log.Append(LogEntry{Term: 4})
+	r.log.Append(LogEntry{Term: 6})
+	r.matchIndex = make([]int, len(r.peers))
+
+	r.matchIndex[1] = 1
+	r.advanceCommitIndexLocked()
+	if r.commitIndex != 0 {
+		t.Fatalf("commitIndex = %d, want 0: an old-term entry on a majority must not commit", r.commitIndex)
+	}
+
+	r.matchIndex[1] = 2
+	r.advanceCommitIndexLocked()
+	if r.commitIndex != 2 {
+		t.Fatalf("commitIndex = %d, want 2: a current-term entry on a majority commits the prefix", r.commitIndex)
+	}
+}

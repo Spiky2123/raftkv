@@ -1,7 +1,7 @@
 # raftkv — Raft Consensus & a Fault-Tolerant Key-Value Store in Go
 
 ![Language](https://img.shields.io/badge/language-Go-00ADD8?style=flat-square)
-![Status](https://img.shields.io/badge/status-work%20in%20progress%20(week%204%20of%208)-yellow?style=flat-square)
+![Status](https://img.shields.io/badge/status-work%20in%20progress%20(week%205%20of%208)-yellow?style=flat-square)
 ![Dependencies](https://img.shields.io/badge/dependencies-standard%20library%20only-brightgreen?style=flat-square)
 [![CI](https://github.com/Spiky2123/raftkv/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Spiky2123/raftkv/actions/workflows/ci.yml)
 
@@ -9,12 +9,13 @@ raftkv is my implementation of the Raft consensus algorithm in Go, built from th
 
 It's the follow-up to [clox](https://github.com/Spiky2123/CLox). clox taught me how a language executes; raftkv is about what happens when the machines running a system can fail independently. I'm building it as an 8-week project, test first, and committing in small steps. Each milestone is tagged (`week1-network`, `week2-election`, `week3-replication`, ...), and [`NOTES.md`](NOTES.md) is my running journal of the design decisions and bugs along the way.
 
-> **Status:** the simulated network, leader election, and log replication are done and stress-tested. Persistence and crash recovery are next. Everything after that is planned and listed in the [roadmap](#roadmap), and nothing there is claimed as built until it's tagged.
+> **Status:** the simulated network, leader election, log replication, and persistence with crash recovery are done and stress-tested. The key-value service is next. Everything after that is planned and listed in the [roadmap](#roadmap), and nothing there is claimed as built until it's tagged.
 
 ## Highlights
 
 - **Leader election that holds up under failure**: randomized election timeouts, term-based step-down, one vote per term, and heartbeats. A randomized test with 5 nodes, 20% message loss, delays, and repeated leader isolation checks that no term ever has two leaders
 - **Log replication that converges under churn**: the `AppendEntries` consistency check, conflict resolution, majority commit, and the "candidate's log must be up to date" voting rule. A 5-node test keeps isolating up to 2 nodes under 10% message loss while submitting commands, then checks that every node applied exactly the same log
+- **Persistence that survives crashes**: each node saves its term, vote, and log before replying to any RPC that changed them, and reloads that state on restart. A test repeatedly crashes and restarts nodes under a stream of commands and checks that no committed entry is ever lost or disagreed on. Rejected `AppendEntries` back the leader up a whole term at a time instead of one entry per round trip
 - **A simulated network built for fault injection**: message drops, delays, partitions, and per-node isolation, driven by a seeded random number generator
 - **Raft knows nothing about the network**: the consensus code depends only on a small `Transport` interface, so a real TCP/gRPC transport could replace the simulation without touching Raft
 - **No shared memory between nodes**: every message is gob-encoded and deep-copied in transit, so a node can't accidentally read another node's state through a shared pointer
@@ -28,8 +29,8 @@ It's the follow-up to [clox](https://github.com/Spiky2123/CLox). clox taught me 
 | 1 | Simulated network: drops, delays, partitions | Done | `week1-network` |
 | 2 | Leader election | Done | `week2-election` |
 | 3 | Log replication: `AppendEntries` consistency check, conflict resolution, commit index, apply channel, "candidate's log must be up to date" voting rule | Done | `week3-replication` |
-| 4 | Persistence and crash recovery, fast log-conflict backup, Figure 8 tests | Next | |
-| 5 | Key-value service: Get/Put, client that finds the leader and retries, request deduplication, reads through the log for linearizability | Planned | |
+| 4 | Persistence and crash recovery, fast log-conflict backup, Figure 8 tests | Done | `week4-persistence` |
+| 5 | Key-value service: Get/Put, client that finds the leader and retries, request deduplication, reads through the log for linearizability | Next | |
 | 6 | Snapshots, log truncation, `InstallSnapshot` | Planned | |
 | 7 | Chaos testing with seeded failure schedules, recorded client histories checked with [Porcupine](https://github.com/anishathalye/porcupine) | Planned | |
 | 8 | Benchmarks (throughput and p99 latency at 3 vs 5 nodes, leader-failover window), write-up, demo | Planned | |
@@ -57,19 +58,28 @@ Target completion: late November 2026.
 **Log replication (`raft`)**
 - `Submit(cmd)` appends a command to the leader's log and returns its index and term; non-leaders refuse it
 - The leader tracks `nextIndex` and `matchIndex` per follower and sends each one the entries it's missing, along with the index and term of the entry just before them
-- Followers reject an `AppendEntries` whose previous entry doesn't match their log, and the leader backs up and retries
+- Followers reject an `AppendEntries` whose previous entry doesn't match their log; the follower reports the conflicting term and where it starts, and the leader backs up a whole term at a time and retries
 - On a real conflict (same index, different term) a follower deletes the conflicting entry and everything after it; entries that already match are kept, so a delayed or duplicated message can't erase anything
 - The leader commits an entry once a majority holds it, but only entries from its own term (Raft's Figure 8 rule); earlier entries become committed along with them
 - Followers learn the commit index from the leader, capped at the part of their log the leader just confirmed
 - Voting restriction: a node only votes for a candidate whose log is at least as up to date as its own (last term first, then length), so every new leader holds every committed entry
 - One applier goroutine per node delivers committed entries on an apply channel, in order and exactly once
 
+**Persistence and crash recovery (`raft`, `storage`)**
+- A node saves its current term, its vote, and its log before replying to any RPC that changed them, so a crash can't make it contradict something it already told a peer (for example, voting twice in one term)
+- State is saved through a small `Save`/`Load` interface that Raft defines itself; an in-memory store backs the tests, and a real node could use a file-backed one without Raft changing
+- On restart a node reloads that state and rejoins; everything volatile (commit index, role, match index, timers) is rebuilt by re-replication rather than persisted
+- The test cluster can `crash` a node (keeping its storage) and `restart` it (a fresh node over the same storage), and a churn test crashes and restarts nodes under load and checks no committed entry is ever lost
+- A rejected `AppendEntries` reports the conflicting term and the first index of that term, so the leader skips a whole term in one round trip instead of backing up one entry at a time; a backup is only applied if it moves `nextIndex` backward, so duplicate or stale replies can't disturb it
+
 ## Testing
 
-The project has 80+ tests, all run under the race detector:
+The project has 95+ tests, all run under the race detector:
 
 - **Rule-level unit tests**: the vote and `AppendEntries` handlers are called directly with hand-built arguments, covering term handling, one vote per term, the up-to-date voting rule, the consistency check, conflict truncation, and how the commit index moves (never past what the leader confirmed, never backwards)
 - **Leader-side unit tests**: building per-follower requests, handling success and failure replies (including duplicate and out-of-order ones), and advancing the commit index only on a majority of current-term entries
+- **Persistence unit tests**: a saved term, vote, and log round-trip back through a fresh node; a granted vote is on disk before the reply is sent; and the Figure 8 case where an entry held by a majority but left over from an earlier term must not be committed by replica count until a current-term entry commits on top of it
+- **Fast-backup unit tests**: a follower reports the right conflict term and index on both a term mismatch and a too-short log, and the leader jumps `nextIndex` back a whole term in one reply
 - **Log unit tests**: the log wrapper's bounds checks, truncation, and that slices are copies rather than views into the log
 - **Applier tests**: entries are delivered in order, the lock isn't held while sending, and a killed node's applier exits even when nobody reads the channel
 - **Cluster tests**: 3-node and 5-node clusters elect exactly one leader, re-elect after the leader is disconnected, agree on submitted commands, don't commit without a majority, let a disconnected follower catch up, and overwrite a deposed leader's uncommitted entries
@@ -77,6 +87,7 @@ The project has 80+ tests, all run under the race detector:
 - **Chaos tests**:
   - 5 nodes with 20% message loss, random delays, and the leader repeatedly isolated, checking Raft's *Election Safety* property (at most one leader per term)
   - Two 5-node churn tests, one on a reliable network and one with 10% message loss and random delays. Every 200–400 ms they isolate a random 0–2 nodes while submitting commands to every node, then heal the network and require all five nodes to have applied an identical log
+  - A crash/restart churn test: while commands are submitted, one node at a time is crashed (keeping its storage) and restarted from it, and the test requires that no committed index ever holds two different commands and that every node converges on the same final log
 - **Lifecycle tests**: a killed node stops all its goroutines and stays dead
 
 ## Example
@@ -126,10 +137,15 @@ Requires Go (version in `go.mod`). No other dependencies.
    │ raft.Raft                                │
    │   leader election: done                  │
    │   log replication: done                  │
-   │   persistence: next                      │
-   └─────────────────────┬────────────────────┘
-                         │  Transport interface
-   ┌─────────────────────┴────────────────────┐
+   │   persistence: done                      │
+   └──────┬───────────────────────────┬───────┘
+          │ Transport interface       │ Storage interface
+          │                 ┌─────────┴────────────────────┐
+          │                 │ storage.Memory               │
+          │                 │   Save / Load a state blob   │
+          │                 │   (file-backed store planned)│
+          │                 └──────────────────────────────┘
+   ┌──────┴───────────────────────────────────┐
    │ labnet.Endpoint                          │
    │   per-node handle on the network         │
    └─────────────────────┬────────────────────┘
@@ -150,7 +166,9 @@ Dashed boxes are planned layers.
 
 **Elections.** A candidate increments its term, votes for itself, and asks every peer for a vote in parallel. Votes are counted in a variable local to that election, only while holding the lock, and a majority (`>=`) makes it leader. The `leaderLoop` for a term exits as soon as the node is no longer the leader of that term, so goroutines from an old leadership can't act in a new one.
 
-**Replication.** Each round, the leader builds one `AppendEntries` per follower from that follower's `nextIndex`. A success reply only proves the follower matches up to the last entry *in that request*, so `matchIndex` is set from the request, not from the leader's current log, which may have grown while the RPC was in flight. The commit index advances to the highest current-term entry held by a majority. On the follower, the commit index is capped at the same confirmed prefix, so a follower never applies an entry it hasn't checked against this leader. A rejected request currently backs `nextIndex` up by one entry; jumping back a whole term at a time is part of week 4.
+**Replication.** Each round, the leader builds one `AppendEntries` per follower from that follower's `nextIndex`. A success reply only proves the follower matches up to the last entry *in that request*, so `matchIndex` is set from the request, not from the leader's current log, which may have grown while the RPC was in flight. The commit index advances to the highest current-term entry held by a majority. On the follower, the commit index is capped at the same confirmed prefix, so a follower never applies an entry it hasn't checked against this leader. A rejected request doesn't back up one entry at a time: the follower returns the term it has at the conflicting index and the first index of that term, and the leader jumps to just past its own copy of that term, or to the follower's reported index if it doesn't have the term at all. The jump is only taken when it moves `nextIndex` backward, so a duplicate or stale rejection can't push it forward.
+
+**Persistence.** The current term, the vote, and the log are the three pieces of state Raft must not lose, because forgetting any of them can break safety (a forgotten vote lets a node vote twice in one term). A node writes them to stable storage before it replies to any RPC that changed them, so it can never tell a peer about a decision it might forget on a crash. Storage is reached through a `Save([]byte)` / `Load() []byte` interface that Raft defines, with an in-memory implementation for tests; the actual serialization lives in the log wrapper, so the week-6 snapshot offset will only touch one place. Everything else is volatile: on restart a node starts as a follower with an empty commit index and rebuilds it from the leader's traffic.
 
 **The log.** Log entries live behind their own wrapper type (`LastIndex`, `TermAt`, `Append`, `Slice`, `TruncateFrom`), with a placeholder entry at index 0 so indices match the paper's 1-based numbering. Nothing else indexes the raw slice, which keeps the week-6 snapshot work, where indices are shifted by an offset, contained in one file.
 
@@ -164,6 +182,7 @@ Code comments cite the paper's rules (for example, `// Figure 2: AppendEntries r
 raftkv/
 ├── raft/        # the Raft implementation and its tests
 ├── labnet/      # simulated network: drops, delays, partitions
+├── storage/     # persistent-state interface and an in-memory store
 ├── Makefile     # test, race, stress, bench
 ├── NOTES.md     # design journal, week by week
 └── go.mod
@@ -183,6 +202,7 @@ raftkv/
 - Why election safety ("at most one leader per term") is the property to test, and how to test it under failure
 - Why the voting restriction protects committed entries: the majority that stores an entry and the majority that elects a leader always overlap
 - Why a leader only commits entries from its own term by counting replicas, and how older entries get committed along with them
+- Why term, vote, and log are the state that must survive a crash, and why they have to be saved before replying to an RPC, not just before the next one
 - Why a follower must only truncate on a real conflict: a delayed or duplicated message knows less than the follower does
 
 **Concurrency**

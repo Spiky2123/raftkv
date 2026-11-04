@@ -570,3 +570,31 @@ func TestRestartRestoresState(t *testing.T) {
 		t.Fatalf("expected nodes storage to persist, got last index lower than commited entries instead")
 	}
 }
+
+func TestPersistenceNoLostCommitsUnderChurn(t *testing.T) {
+	const n = 5
+	c := makeCluster(t, n)
+	c.start()
+	c.checkOneLeader(t)
+
+	const rounds = 15
+	cmd := 100
+	crashed := -1
+
+	for round := 0; round < rounds; round++ {
+		c.one(t, cmd, n/2+1)
+		cmd++
+		if crashed != -1 {
+			c.restart(crashed)
+		}
+		crashed = round % n
+		c.crash(crashed)
+	}
+
+	if crashed != -1 {
+		c.restart(crashed)
+	}
+	c.checkOneLeader(t)
+
+	c.one(t, cmd, n)
+}
